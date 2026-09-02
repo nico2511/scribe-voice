@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,7 @@ VALID_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
 VALID_DEVICES = {"auto", "cpu", "cuda"}
 VALID_COMPUTE = {"int8", "int8_float16", "float16", "float32"}
 VALID_PROFILES = {"fast", "balanced", "accurate"}
+MIN_RECORD_CHUNKS = 4
 
 DEFAULT_CONFIG = {
     "language": "fr",
@@ -182,7 +184,13 @@ class AudioRecorder:
         with self._lock:
             frames = list(self.frames)
             self.frames = []
-        if not frames:
+        if not frames or len(frames) < MIN_RECORD_CHUNKS:
+            emit(
+                {
+                    "type": "error",
+                    "message": "Enregistrement trop court — maintenez la touche dictée un peu plus longtemps.",
+                }
+            )
             return None
         fd, path = tempfile.mkstemp(suffix=".wav", prefix="csnote_")
         os.close(fd)
@@ -306,6 +314,9 @@ class VoiceWorker:
         self.transcriber: Transcriber | None = None
         self.recording = False
         self.auto_stop_timer: threading.Timer | None = None
+        self._audio_queue: queue.Queue[str | None] = queue.Queue()
+        self._transcribe_busy = False
+        threading.Thread(target=self._transcribe_loop, daemon=True).start()
 
     def init(self, config: dict[str, Any] | None) -> None:
         self.config = sanitize_config(config)
@@ -370,7 +381,14 @@ class VoiceWorker:
             emit({"type": "transcript", "text": ""})
             return
 
-        def _process() -> None:
+        self._audio_queue.put(audio_path)
+
+    def _transcribe_loop(self) -> None:
+        while True:
+            audio_path = self._audio_queue.get()
+            if audio_path is None:
+                break
+            self._transcribe_busy = True
             emit({"type": "transcribing", "active": True})
             text = self.transcriber.transcribe(audio_path) if self.transcriber else None
             try:
@@ -379,8 +397,8 @@ class VoiceWorker:
                 pass
             emit({"type": "transcribing", "active": False})
             emit({"type": "transcript", "text": text or ""})
-
-        threading.Thread(target=_process, daemon=True).start()
+            self._transcribe_busy = False
+            self._audio_queue.task_done()
 
     def shutdown(self) -> None:
         if self.recorder:
