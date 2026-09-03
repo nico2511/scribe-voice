@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
 CyberScribeNote — Voice worker (sidecar)
-Basé sur la logique CyberScribe : PyAudio + faster-whisper.
-Communication JSON ligne par ligne via stdin/stdout.
+
+Flux audio / Whisper aligné sur CyberScribe
+(https://github.com/nico2511/CyberScribe) :
+  - un seul process Python permanent
+  - PyAudio + WhisperModel gardés en mémoire entre les dictées
+  - même presets VAD / transcription que CyberScribe
+
+La seule différence structurelle : communication JSON stdin/stdout
+pour le parent Tauri (CyberScribe est une app Python monolithe).
 """
 
 from __future__ import annotations
@@ -31,8 +38,8 @@ VALID_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
 VALID_DEVICES = {"auto", "cpu", "cuda"}
 VALID_COMPUTE = {"int8", "int8_float16", "float16", "float32"}
 VALID_PROFILES = {"fast", "balanced", "accurate"}
-MIN_RECORD_CHUNKS = 4
 
+# Identiques à CyberScribe.py
 DEFAULT_CONFIG = {
     "language": "fr",
     "model_size": "base",
@@ -127,6 +134,8 @@ def check_deps() -> tuple[bool, str | None]:
 
 
 class AudioRecorder:
+    """Identique à CyberScribe.AudioRecorder — PyAudio permanent."""
+
     def __init__(self) -> None:
         import pyaudio
 
@@ -135,6 +144,8 @@ class AudioRecorder:
         self.stream = None
         self.frames: list[bytes] = []
         self.is_recording = False
+        self.format = pyaudio.paInt16
+        self.channels = 1
         self.rate = 16000
         self.chunk = 1024
         self._lock = threading.Lock()
@@ -147,8 +158,8 @@ class AudioRecorder:
         self.is_recording = True
         try:
             self.stream = self.audio.open(
-                format=self.pyaudio.paInt16,
-                channels=1,
+                format=self.format,
+                channels=self.channels,
                 rate=self.rate,
                 input=True,
                 frames_per_buffer=self.chunk,
@@ -181,23 +192,20 @@ class AudioRecorder:
                 self.stream = None
         except Exception:
             pass
+
         with self._lock:
             frames = list(self.frames)
             self.frames = []
-        if not frames or len(frames) < MIN_RECORD_CHUNKS:
-            emit(
-                {
-                    "type": "error",
-                    "message": "Enregistrement trop court — maintenez la touche dictée un peu plus longtemps.",
-                }
-            )
+
+        if not frames:
             return None
+
         fd, path = tempfile.mkstemp(suffix=".wav", prefix="csnote_")
         os.close(fd)
         try:
             with wave.open(path, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(self.audio.get_sample_size(self.pyaudio.paInt16))
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(self.audio.get_sample_size(self.format))
                 wf.setframerate(self.rate)
                 wf.writeframes(b"".join(frames))
             return path
@@ -218,12 +226,14 @@ class AudioRecorder:
 
 
 class Transcriber:
+    """Identique à CyberScribe.Transcriber — modèle chargé une fois, gardé en RAM."""
+
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.model = None
         self.loading = False
         self.loaded_event = threading.Event()
-        self._lock = threading.Lock()
+        self._transcribe_lock = threading.Lock()
         threading.Thread(target=self._load_model, daemon=True).start()
 
     def _load_model(self) -> None:
@@ -248,7 +258,9 @@ class Transcriber:
             if device == "cuda":
                 compute_type = "int8_float16" if compute_pref == "int8" else compute_pref
             else:
-                compute_type = "int8" if compute_pref in ("int8_float16", "float16") else compute_pref
+                compute_type = (
+                    "int8" if compute_pref in ("int8_float16", "float16") else compute_pref
+                )
 
             self.model = WhisperModel(
                 model_size,
@@ -266,9 +278,21 @@ class Transcriber:
             self.loading = False
 
     def reload(self, config: dict[str, Any]) -> None:
+        """Comme CyberScribe : recharge seulement si model/device/compute changent."""
+        prev = self.config
+        self.config = config
+        same = (
+            prev.get("model_size") == config.get("model_size")
+            and prev.get("device") == config.get("device")
+            and prev.get("compute_type") == config.get("compute_type")
+        )
+        if same and self.model is not None and self.loaded_event.is_set():
+            # Langue / profil peuvent changer sans recharger le modèle
+            emit({"type": "model", "loading": False, "loaded": True})
+            return
+
         def _reload() -> None:
-            with self._lock:
-                self.config = config
+            with self._transcribe_lock:
                 self.model = None
                 self.loaded_event.clear()
                 self._load_model()
@@ -277,13 +301,15 @@ class Transcriber:
 
     def transcribe(self, audio_path: str) -> str | None:
         if not self.model:
+            if not self.loading and not self.loaded_event.is_set():
+                return None
             if not self.loaded_event.wait(timeout=120):
                 emit({"type": "error", "message": "Timeout chargement modèle Whisper"})
                 return None
         if not self.model:
             return None
 
-        with self._lock:
+        with self._transcribe_lock:
             try:
                 lang = self.config.get("language")
                 if lang == "auto":
@@ -314,14 +340,16 @@ class VoiceWorker:
         self.transcriber: Transcriber | None = None
         self.recording = False
         self.auto_stop_timer: threading.Timer | None = None
-        self._audio_queue: queue.Queue[str | None] = queue.Queue()
         self._transcribe_busy = False
-        threading.Thread(target=self._transcribe_loop, daemon=True).start()
 
     def init(self, config: dict[str, Any] | None) -> None:
         self.config = sanitize_config(config)
         if self.recorder is None:
-            self.recorder = AudioRecorder()
+            try:
+                self.recorder = AudioRecorder()
+            except Exception as exc:
+                emit({"type": "error", "message": f"Micro indisponible : {exc}"})
+                return
         if self.transcriber is None:
             self.transcriber = Transcriber(self.config)
         else:
@@ -329,25 +357,31 @@ class VoiceWorker:
         emit({"type": "status", "recording": False, "depsOk": True})
 
     def toggle(self) -> None:
+        # Comme CyberScribe : on peut démarrer pendant qu'une transcription finit
+        # (thread séparé). On bloque seulement si on est déjà en enregistrement.
         if self.recording:
             self._stop()
         else:
             self._start()
 
+    def _beep(self, freq: int, ms: int) -> None:
+        try:
+            import winsound
+
+            winsound.Beep(freq, ms)
+        except Exception:
+            pass
+
     def _start(self) -> None:
         if not self.recorder:
             emit({"type": "error", "message": "Worker non initialisé"})
             return
+        # CyberScribe : micro d'abord, puis bip
         if not self.recorder.start():
             return
         self.recording = True
         emit({"type": "recording", "active": True})
-        try:
-            import winsound
-
-            winsound.Beep(600, 150)
-        except Exception:
-            pass
+        self._beep(600, 200)
 
         max_seconds = int(self.config.get("max_record_seconds") or 0)
         if max_seconds > 0:
@@ -369,36 +403,34 @@ class VoiceWorker:
             self.auto_stop_timer.cancel()
             self.auto_stop_timer = None
         emit({"type": "recording", "active": False})
-        try:
-            import winsound
-
-            winsound.Beep(400, 150)
-        except Exception:
-            pass
-
+        # CyberScribe : bip puis stop micro, puis process_audio en thread
+        self._beep(400, 200)
         audio_path = self.recorder.stop()
         if not audio_path:
             emit({"type": "transcript", "text": ""})
             return
+        threading.Thread(
+            target=self._process_audio, args=(audio_path,), daemon=True
+        ).start()
 
-        self._audio_queue.put(audio_path)
-
-    def _transcribe_loop(self) -> None:
-        while True:
-            audio_path = self._audio_queue.get()
-            if audio_path is None:
-                break
-            self._transcribe_busy = True
-            emit({"type": "transcribing", "active": True})
-            text = self.transcriber.transcribe(audio_path) if self.transcriber else None
+    def _process_audio(self, audio_path: str) -> None:
+        """Équivalent de CyberScribeApp.process_audio."""
+        self._transcribe_busy = True
+        emit({"type": "transcribing", "active": True})
+        text = ""
+        try:
+            if self.transcriber:
+                text = self.transcriber.transcribe(audio_path) or ""
+        except Exception as exc:
+            emit({"type": "error", "message": f"Transcription : {exc}"})
+        finally:
             try:
                 os.remove(audio_path)
             except Exception:
                 pass
             emit({"type": "transcribing", "active": False})
-            emit({"type": "transcript", "text": text or ""})
+            emit({"type": "transcript", "text": text})
             self._transcribe_busy = False
-            self._audio_queue.task_done()
 
     def shutdown(self) -> None:
         if self.recorder:
@@ -426,24 +458,27 @@ def main() -> None:
             continue
 
         cmd = req.get("cmd")
-        if cmd == "init":
-            worker.init(req.get("config"))
-        elif cmd == "toggle":
-            worker.toggle()
-        elif cmd == "preload":
-            cfg = sanitize_config(req.get("config"))
-            worker.init(cfg)
-            if worker.transcriber:
-                worker.transcriber.loaded_event.wait(timeout=300)
-                loaded = worker.transcriber.model is not None
-                emit({"type": "model", "loading": False, "loaded": loaded})
-        elif cmd == "shutdown":
-            worker.shutdown()
-            break
-        elif cmd == "ping":
-            emit({"type": "pong"})
-        else:
-            emit({"type": "error", "message": f"Commande inconnue : {cmd}"})
+        try:
+            if cmd == "init":
+                worker.init(req.get("config"))
+            elif cmd == "toggle":
+                worker.toggle()
+            elif cmd == "preload":
+                cfg = sanitize_config(req.get("config"))
+                worker.init(cfg)
+                if worker.transcriber:
+                    worker.transcriber.loaded_event.wait(timeout=300)
+                    loaded = worker.transcriber.model is not None
+                    emit({"type": "model", "loading": False, "loaded": loaded})
+            elif cmd == "shutdown":
+                worker.shutdown()
+                break
+            elif cmd == "ping":
+                emit({"type": "pong"})
+            else:
+                emit({"type": "error", "message": f"Commande inconnue : {cmd}"})
+        except Exception as exc:
+            emit({"type": "error", "message": f"Worker : {exc}"})
 
 
 if __name__ == "__main__":
