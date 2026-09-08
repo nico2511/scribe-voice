@@ -119,15 +119,50 @@ def log_error(msg: str) -> None:
     logging.error(msg)
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise OSError("stdout write returned 0")
+        view = view[n:]
+
+
+def _force_utf8_stdio() -> None:
+    """Passe stdout en binaire (Windows) pour que os.write(1, json) ne soit pas manglé.
+
+    On ne réouvre pas sys.stdin/sys.stdout : un second wrapper sur le même fd
+    peut fermer le pipe au GC. emit() écrit directement sur fd 1.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import msvcrt
+
+        msvcrt.setmode(1, os.O_BINARY)
+    except Exception as exc:
+        log_error(f"stdio setmode stdout: {exc}")
+
+
 def emit(payload: dict[str, Any]) -> None:
-    """Thread-safe JSON line to stdout (évite les lignes JSON entrelacées)."""
-    line = json.dumps(payload, ensure_ascii=False) + "\n"
+    """JSON UTF-8 sur fd 1 — ignore le wrapper texte / NullWriter PyInstaller."""
+    data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
     with _emit_lock:
         try:
-            sys.stdout.write(line)
-            sys.stdout.flush()
+            _write_all(1, data)
+            return
         except (BrokenPipeError, OSError) as exc:
-            log_error(f"emit broken pipe: {exc}")
+            log_error(f"emit fd1: {exc}")
+        try:
+            buf = getattr(sys.stdout, "buffer", None)
+            if buf is not None:
+                buf.write(data)
+                buf.flush()
+                return
+            sys.stdout.write(data.decode("utf-8"))
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError, AttributeError) as exc:
+            log_error(f"emit stdout: {exc}")
 
 
 def sanitize_config(data: dict[str, Any] | None) -> dict[str, Any]:
@@ -626,7 +661,8 @@ class VoiceWorker:
 
 
 def main() -> None:
-    log(f"Worker start pid={os.getpid()} python={sys.executable}")
+    _force_utf8_stdio()
+    log(f"Worker start pid={os.getpid()} python={sys.executable} frozen={getattr(sys, 'frozen', False)}")
     deps_ok, err = check_deps()
     if not deps_ok:
         emit({"type": "deps", "ok": False, "error": err})
