@@ -3,13 +3,18 @@
 # Build:  cd voice && pyinstaller voice_worker.spec
 # Output: voice/dist/voice_worker.exe  (copied next to cyberscribe-note.exe / resources)
 
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
+
+# faster_whisper VAD (silero_vad_v6.onnx) — requis pour vad_filter=True
+_fw_datas = collect_data_files("faster_whisper")
 
 a = Analysis(
     ['voice_worker.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=_fw_datas,
     hiddenimports=[
         'faster_whisper',
         'ctranslate2',
