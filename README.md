@@ -60,7 +60,7 @@ Windows x64, CPython **3.11** (l'exe de référence utilise 3.11.9) :
 - `voice_worker.spec` : spec PyInstaller (inclut `silero_vad_v6.onnx` de faster-whisper, requis pour le VAD).
 - `build_sidecar.ps1` : script historique de CyberScribeNote (copie l'exe dans `src-tauri/binaries`).
 
-CI : `.github/workflows/ci.yml` (provisoirement dans `ci/github-workflows/`, voir ce dossier) lance les tests (Windows + Linux) à chaque push / PR ;
+CI : `.github/workflows/ci.yml` lance les tests (Windows + Linux) à chaque push / PR ;
 `.github/workflows/release.yml` construit l'exe sur un tag `v*`, le teste (ping/shutdown)
 et publie `voice_worker.exe`, le zip et `SHA256SUMS` dans la release GitHub.
 
