@@ -1,2 +1,39 @@
-faster-whisper>=1.1.0,<2
-pyaudio>=0.2.14
+# Dépendances d'exécution FIGÉES de scribe-voice v1.0.
+#
+# Versions relevées dans le voice_worker.exe actuellement distribué avec
+# CyberScribeNote (CyberScribeNote-win.zip, exe du 2026-09-29, Python 3.11.9,
+# SHA-256 36f27355c1d42ee7398a9f8654953baace31569b42c569fe805882cb923c008a),
+# par extraction PyInstaller (pyinstxtractor-ng) et lecture des métadonnées
+# (dist-info, version.py, chaînes __version__ des modules natifs).
+# Les lignes marquées « déduit » ne sont pas embarquées / identifiables dans
+# l'exe : version = dernière publiée sur PyPI avant le build (2026-09-29).
+# Cible : Windows x64, CPython 3.11.
+
+# --- Dépendances directes -------------------------------------------------
+faster-whisper==1.2.1
+pyaudio==0.2.14
+
+# --- Transitives (faster-whisper) -----------------------------------------
+ctranslate2==4.8.2
+onnxruntime==1.30.0
+av==18.1.0
+tokenizers==0.23.2
+huggingface-hub==1.33.0
+hf-xet==1.6.0
+numpy==2.4.6
+tqdm==4.70.1
+colorama==0.4.6
+pyyaml==6.0.3
+httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+idna==3.20
+certifi==2026.7.22
+click==8.5.0
+filelock==4.0.6
+fsspec==2026.9.0
+packaging==26.3
+anyio==4.15.1             # déduit (version non lisible dans l'exe)
+typing-extensions==4.16.0 # déduit (version non lisible dans l'exe)
+protobuf==7.36.2          # déduit (requis par onnxruntime, non embarqué dans l'exe)
+flatbuffers==25.12.19     # déduit (requis par onnxruntime, non embarqué dans l'exe)
