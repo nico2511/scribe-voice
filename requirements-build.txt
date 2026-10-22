@@ -1,0 +1,11 @@
+# Outils de build de l'exe (PyInstaller) — en plus de requirements.txt.
+# Version PyInstaller non lisible dans l'exe (bootloader 6.x) : déduite =
+# dernière version publiée avant le build de l'exe actuel (2026-09-29).
+-r requirements.txt
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.7
+# Dépendances Windows de PyInstaller 6.22.3 (déduites, même règle de date)
+altgraph==0.17.5
+pefile==2024.8.26 ; sys_platform == "win32"
+pywin32-ctypes==0.2.3 ; sys_platform == "win32"
+setuptools==84.0.0

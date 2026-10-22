@@ -1,0 +1,2 @@
+# Tests de contrat (aucun micro ni modèle requis : pyaudio / faster_whisper sont simulés).
+pytest==9.1.1
