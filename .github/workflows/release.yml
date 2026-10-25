@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+      - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - run: python -m pytest -v
+
+  build-windows:
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Même interpréteur que l'exe de référence (python311.dll 3.11.9).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          architecture: x64
+
+      - name: Build voice_worker.exe + zip + SHA256SUMS
+        shell: pwsh
+        run: ./build.ps1 -Version "${{ github.ref_name }}"
+
+      - name: Smoke test de l'exe (deps/ready/ping/shutdown)
+        run: python tools/smoke_exe.py release/voice_worker.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scribe-voice-${{ github.ref_name }}-win-x64
+          path: release/*
+
+      - name: Publier la release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/voice_worker.exe
+            release/scribe-voice-${{ github.ref_name }}-win-x64.zip
+            release/SHA256SUMS
+          generate_release_notes: true
