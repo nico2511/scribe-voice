@@ -1,8 +1,7 @@
 """Fixtures communes.
 
-``voice_worker`` crée ~/Documents/CyberScribeNote/{models,voice_worker.log} à
-l'import : on redirige HOME / USERPROFILE vers un dossier temporaire AVANT tout
-import, pour ne rien écrire dans le profil réel (aucune modification du code).
+On redirige HOME / USERPROFILE vers un dossier temporaire avant l'import de
+``voice_worker`` pour ne rien écrire dans le profil réel.
 """
 from __future__ import annotations
 
@@ -25,6 +24,8 @@ WORKER = ROOT / "voice_worker.py"
 _HOME = tempfile.mkdtemp(prefix="scribe-voice-home-")
 os.environ["HOME"] = _HOME
 os.environ["USERPROFILE"] = _HOME
+if str(FAKES) not in sys.path:
+    sys.path.insert(0, str(FAKES))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -54,6 +55,7 @@ class WorkerProcess:
             "FAKE_PYAUDIO_FAIL_OPEN",
             "FAKE_WHISPER",
             "FAKE_VAD",
+            "SCRIBE_VOICE_MODELS_DIR",
         ):
             env.pop(key, None)
         env.update(env_extra or {})

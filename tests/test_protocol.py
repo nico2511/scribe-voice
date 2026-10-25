@@ -31,7 +31,8 @@ def test_startup_emits_deps_then_ready(worker_factory):
     first = w.wait_for(lambda e: True)
     second = w.wait_for(lambda e: True)
     assert first == {"type": "deps", "ok": True}
-    assert second == {"type": "ready"}
+    assert second["type"] == "ready"
+    assert "version" in second and "protocol" in second
     w.send({"cmd": "shutdown"})
     assert w.close() == 0
 

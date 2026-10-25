@@ -20,9 +20,15 @@ def test_valid_values_kept_and_normalized():
         "max_record_seconds": "30", "inconnu": 1,
     })
     assert cfg == {
-        "language": "en", "model_size": "large-v3", "device": "cpu",
-        "compute_type": "float32", "transcription_profile": "accurate",
+        "language": "en",
+        "model_size": "large-v3",
+        "device": "cpu",
+        "compute_type": "float32",
+        "transcription_profile": "accurate",
         "max_record_seconds": 30,
+        "models_dir": None,
+        "offline": False,
+        "app_id": None,
     }
 
 

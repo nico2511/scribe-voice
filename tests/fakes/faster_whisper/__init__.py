@@ -22,13 +22,38 @@ class _Segment:
 
 
 class WhisperModel:
-    def __init__(self, model_size, device="cpu", compute_type="int8", download_root=None):
+    def __init__(
+        self,
+        model_size,
+        device="cpu",
+        compute_type="int8",
+        download_root=None,
+        local_files_only=False,
+        **kwargs,
+    ):
         cfg = _cfg()
         if cfg.get("fail_load"):
             raise RuntimeError("modèle introuvable (simulé)")
+        loads_file = cfg.get("loads_file")
+        if loads_file:
+            with open(loads_file, "a", encoding="utf-8") as fp:
+                fp.write(
+                    json.dumps(
+                        {
+                            "model": model_size,
+                            "device": device,
+                            "compute_type": compute_type,
+                            "download_root": download_root,
+                            "local_files_only": local_files_only,
+                        }
+                    )
+                    + "\n"
+                )
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        self.download_root = download_root
+        self.local_files_only = local_files_only
         self._texts = list(cfg.get("texts") or ["Scribe, corrige le texte."])
         self._calls_file = cfg.get("calls_file")
 

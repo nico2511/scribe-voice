@@ -27,23 +27,50 @@ import unicodedata
 import wave
 from typing import Any
 
+WORKER_VERSION = "1.1.0-dev"
+PROTOCOL_VERSION = 2
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(
+DEFAULT_DOWNLOAD_ROOT = os.path.join(
     os.path.expanduser("~"), "Documents", "CyberScribeNote", "models"
 )
-LOG_DIR = os.path.join(os.path.expanduser("~"), "Documents", "CyberScribeNote")
-os.makedirs(MODELS_DIR, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
-
-LOG_FILE = os.path.join(LOG_DIR, "voice_worker.log")
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    encoding="utf-8",
+DEFAULT_LOG_ROOT = os.path.join(
+    os.path.expanduser("~"), "Documents", "CyberScribeNote"
 )
-_fault_fp = open(LOG_FILE, "a", encoding="utf-8")
-faulthandler.enable(file=_fault_fp, all_threads=True)
+
+_logging_ready = False
+_fault_fp: Any = None
+
+
+def _default_log_dir(app_id: str | None = None) -> str:
+    if app_id:
+        return os.path.join(DEFAULT_LOG_ROOT, app_id)
+    return DEFAULT_LOG_ROOT
+
+
+def _ensure_logging(app_id: str | None = None) -> None:
+    """Configure le journal fichier (lazy — aucun dossier créé à l'import du module)."""
+    global _logging_ready, _fault_fp
+    log_dir = _default_log_dir(app_id)
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "voice_worker.log")
+    if not _logging_ready:
+        logging.basicConfig(
+            filename=log_file,
+            level=logging.DEBUG,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            encoding="utf-8",
+            force=True,
+        )
+        _fault_fp = open(log_file, "a", encoding="utf-8")
+        faulthandler.enable(file=_fault_fp, all_threads=True)
+        _logging_ready = True
+    else:
+        for handler in logging.root.handlers:
+            if isinstance(handler, logging.FileHandler):
+                handler.baseFilename = os.path.abspath(log_file)
+                handler.stream.close()
+                handler.stream = open(log_file, "a", encoding="utf-8")
 
 VALID_LANGUAGES = {
     "auto", "en", "fr", "de", "es", "it", "ja", "zh", "nl", "uk", "pt", "ru",
@@ -55,12 +82,17 @@ VALID_PROFILES = {"fast", "balanced", "accurate"}
 
 DEFAULT_CONFIG = {
     "language": "fr",
-    "model_size": "base",
+    "model_size": "small",
     "device": "auto",
     "compute_type": "int8",
     "transcription_profile": "fast",
     "max_record_seconds": 90,
+    "models_dir": None,
+    "offline": False,
+    "app_id": None,
 }
+
+_HF_REPO_PREFIX = "models--Systran--faster-whisper-"
 
 PROFILE_PRESETS = {
     # Dictée : VAD souple — les pauses naturelles ne doivent pas tronquer la phrase.
@@ -181,6 +213,160 @@ def emit(payload: dict[str, Any]) -> None:
             log_error(f"emit stdout: {exc}")
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
+def _sanitize_app_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    safe = re.sub(r"[^\w.\-]+", "_", text, flags=re.UNICODE)
+    return safe[:120] or None
+
+
+def _resolve_models_dir_from_env() -> str | None:
+    raw = os.environ.get("SCRIBE_VOICE_MODELS_DIR")
+    if not raw or not str(raw).strip():
+        return None
+    return os.path.abspath(os.path.expanduser(str(raw).strip()))
+
+
+def _normalize_models_dir(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return os.path.abspath(os.path.expanduser(text))
+
+
+def is_ct2_model_dir(path: str) -> bool:
+    """Vrai si ``path`` ressemble à un dossier modèle CTranslate2 (faster-whisper)."""
+    if not path or not os.path.isdir(path):
+        return False
+    for name in ("model.bin", "model.bin.index"):
+        if os.path.isfile(os.path.join(path, name)):
+            return True
+    return False
+
+
+def _hf_repo_dir_name(model_size: str) -> str:
+    return f"{_HF_REPO_PREFIX}{model_size}"
+
+
+def _find_hf_snapshot(models_root: str, model_size: str) -> str | None:
+    """Cherche un snapshot Hugging Face sous ``models_root`` (cache plat ou hub/)."""
+    repo = _hf_repo_dir_name(model_size)
+    bases: list[str] = [models_root]
+    hub = os.path.join(models_root, "hub")
+    if os.path.isdir(hub):
+        bases.append(hub)
+    seen: set[str] = set()
+    for base in bases:
+        repo_path = os.path.join(base, repo)
+        if repo_path in seen or not os.path.isdir(repo_path):
+            continue
+        seen.add(repo_path)
+        snapshots = os.path.join(repo_path, "snapshots")
+        if os.path.isdir(snapshots):
+            for name in sorted(os.listdir(snapshots)):
+                candidate = os.path.join(snapshots, name)
+                if is_ct2_model_dir(candidate):
+                    return candidate
+        if is_ct2_model_dir(repo_path):
+            return repo_path
+    try:
+        for entry in os.scandir(models_root):
+            if not entry.is_dir():
+                continue
+            if entry.name != repo and not entry.name.startswith(repo):
+                continue
+            snapshots = os.path.join(entry.path, "snapshots")
+            if os.path.isdir(snapshots):
+                for name in sorted(os.listdir(snapshots)):
+                    candidate = os.path.join(snapshots, name)
+                    if is_ct2_model_dir(candidate):
+                        return candidate
+            if is_ct2_model_dir(entry.path):
+                return entry.path
+    except OSError:
+        pass
+    return None
+
+
+def _flat_model_candidates(models_root: str, model_size: str) -> list[str]:
+    names = (
+        model_size,
+        f"faster-whisper-{model_size}",
+        f"whisper-{model_size}",
+    )
+    return [os.path.join(models_root, name) for name in names]
+
+
+def resolve_whisper_model(
+    config: dict[str, Any],
+) -> tuple[str | None, str | None, str | None]:
+    """Résout le chemin ou l'identifiant passé à ``WhisperModel``.
+
+    Retourne ``(model_arg, download_root, error_message)``. Si ``error_message`` est
+    renseigné, le chargement doit échouer sans appeler Hugging Face.
+    """
+    model_size = str(config.get("model_size") or DEFAULT_CONFIG["model_size"])
+    offline = _coerce_bool(config.get("offline"))
+    models_dir = _normalize_models_dir(config.get("models_dir"))
+    if models_dir is None:
+        models_dir = _resolve_models_dir_from_env()
+
+    if models_dir is None:
+        if offline:
+            return (
+                None,
+                None,
+                "Mode hors ligne : indiquez models_dir ou SCRIBE_VOICE_MODELS_DIR.",
+            )
+        return model_size, DEFAULT_DOWNLOAD_ROOT, None
+
+    if not os.path.isdir(models_dir):
+        return (
+            None,
+            None,
+            f"Dossier modèles introuvable : {models_dir}",
+        )
+
+    if is_ct2_model_dir(models_dir):
+        return models_dir, None, None
+
+    for candidate in _flat_model_candidates(models_dir, model_size):
+        if is_ct2_model_dir(candidate):
+            return candidate, None, None
+
+    hf_path = _find_hf_snapshot(models_dir, model_size)
+    if hf_path:
+        return hf_path, None, None
+
+    if offline:
+        tried = ", ".join(_flat_model_candidates(models_dir, model_size))
+        return (
+            None,
+            None,
+            (
+                f"Modèle « {model_size} » introuvable dans {models_dir} "
+                f"(dossiers essayés : {tried} ; cache HF {_hf_repo_dir_name(model_size)})."
+            ),
+        )
+
+    return model_size, models_dir, None
+
+
 def sanitize_config(data: dict[str, Any] | None) -> dict[str, Any]:
     cfg = DEFAULT_CONFIG.copy()
     if not isinstance(data, dict):
@@ -190,19 +376,30 @@ def sanitize_config(data: dict[str, Any] | None) -> dict[str, Any]:
             cfg[key] = data[key]
     language = str(cfg.get("language") or "fr").lower()
     cfg["language"] = language if language in VALID_LANGUAGES else "fr"
-    model_size = str(cfg.get("model_size") or "base").lower()
-    cfg["model_size"] = model_size if model_size in VALID_MODELS else "base"
+    model_size = str(cfg.get("model_size") or DEFAULT_CONFIG["model_size"]).lower()
+    cfg["model_size"] = (
+        model_size if model_size in VALID_MODELS else DEFAULT_CONFIG["model_size"]
+    )
     device = str(cfg.get("device") or "auto").lower()
     cfg["device"] = device if device in VALID_DEVICES else "auto"
     compute_type = str(cfg.get("compute_type") or "int8").lower()
     cfg["compute_type"] = compute_type if compute_type in VALID_COMPUTE else "int8"
     profile = str(cfg.get("transcription_profile") or "fast").lower()
-    cfg["transcription_profile"] = profile if profile in VALID_PROFILES else "fast"
+    cfg["transcription_profile"] = profile if profile in PROFILE_PRESETS else "fast"
     try:
         max_seconds = int(cfg.get("max_record_seconds"))
     except (TypeError, ValueError):
         max_seconds = DEFAULT_CONFIG["max_record_seconds"]
     cfg["max_record_seconds"] = max(0, min(max_seconds, 600))
+    cfg["offline"] = _coerce_bool(cfg.get("offline"))
+    cfg["app_id"] = _sanitize_app_id(cfg.get("app_id"))
+    explicit_dir = data.get("models_dir") if isinstance(data, dict) else None
+    if explicit_dir is not None and str(explicit_dir).strip():
+        cfg["models_dir"] = _normalize_models_dir(explicit_dir)
+    elif cfg.get("models_dir"):
+        cfg["models_dir"] = _normalize_models_dir(cfg.get("models_dir"))
+    else:
+        cfg["models_dir"] = _resolve_models_dir_from_env()
     return cfg
 
 
@@ -398,8 +595,18 @@ class Transcriber:
         self.loaded_event.clear()
         emit({"type": "model", "loading": True, "loaded": False})
         model_size = self.config.get("model_size")
+        offline = _coerce_bool(self.config.get("offline"))
+        model_arg, download_root, resolve_err = resolve_whisper_model(self.config)
         last_err: Exception | None = None
         loaded = False
+
+        if resolve_err:
+            log_error(resolve_err)
+            emit({"type": "error", "message": f"Chargement modèle : {resolve_err}"})
+            emit({"type": "model", "loading": False, "loaded": False})
+            self.loaded_event.set()
+            self.loading = False
+            return
 
         try:
             for device, compute_type in self._resolve_device():
@@ -407,13 +614,19 @@ class Transcriber:
                     log(f"Load gen {gen} cancelled")
                     return
                 try:
-                    log(f"Loading Whisper ({model_size}) on {device}/{compute_type}")
-                    model = WhisperModel(
-                        model_size,
-                        device=device,
-                        compute_type=compute_type,
-                        download_root=MODELS_DIR,
+                    log(
+                        f"Loading Whisper ({model_arg!r}) on {device}/{compute_type}"
+                        f" offline={offline} download_root={download_root!r}"
                     )
+                    whisper_kwargs: dict[str, Any] = {
+                        "device": device,
+                        "compute_type": compute_type,
+                    }
+                    if download_root:
+                        whisper_kwargs["download_root"] = download_root
+                    if offline:
+                        whisper_kwargs["local_files_only"] = True
+                    model = WhisperModel(model_arg, **whisper_kwargs)
                     if gen != self._load_gen:
                         log(f"Load gen {gen} discarded after build")
                         return
@@ -451,6 +664,8 @@ class Transcriber:
             prev.get("model_size") == config.get("model_size")
             and prev.get("device") == config.get("device")
             and prev.get("compute_type") == config.get("compute_type")
+            and prev.get("models_dir") == config.get("models_dir")
+            and prev.get("offline") == config.get("offline")
         )
         self.config = config
 
@@ -610,6 +825,7 @@ class VoiceWorker:
 
     def init(self, config: dict[str, Any] | None) -> None:
         self.config = sanitize_config(config)
+        _ensure_logging(self.config.get("app_id"))
         if self.recorder is None:
             try:
                 self.recorder = AudioRecorder()
@@ -730,6 +946,7 @@ class VoiceWorker:
 
 def main() -> None:
     _force_utf8_stdio()
+    _ensure_logging(None)
     log(f"Worker start pid={os.getpid()} python={sys.executable} frozen={getattr(sys, 'frozen', False)}")
     deps_ok, err = check_deps()
     if not deps_ok:
@@ -739,7 +956,11 @@ def main() -> None:
         emit({"type": "deps", "ok": True})
 
     worker = VoiceWorker()
-    emit({"type": "ready"})
+    emit({
+        "type": "ready",
+        "version": WORKER_VERSION,
+        "protocol": PROTOCOL_VERSION,
+    })
 
     try:
         for line in sys.stdin:

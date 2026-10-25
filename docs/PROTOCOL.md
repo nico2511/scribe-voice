@@ -1,4 +1,4 @@
-# Protocole JSON Lines — scribe-voice v1.0
+# Protocole JSON Lines — scribe-voice v1.1
 
 Le worker est un processus permanent. Le parent (CyberScribeNote, Fresh Windows…)
 lui écrit des **commandes** sur **stdin** et lit des **événements** sur **stdout**.
@@ -8,8 +8,8 @@ lui écrit des **commandes** sur **stdin** et lit des **événements** sur **std
   y compris sous Windows (mode binaire). Lire stdout en octets puis décoder en UTF-8.
 - stdin est lu en mode texte Python (encodage par défaut de la plateforme) :
   envoyer de préférence du JSON ASCII (`\uXXXX` pour les caractères non ASCII).
-- stdout ne contient **que** des événements ; les journaux vont dans
-  `~/Documents/CyberScribeNote/voice_worker.log` (aucun changement en v1.0).
+- stdout ne contient **que** des événements ; les journaux vont dans un fichier
+  `voice_worker.log` (voir ci-dessous). Aucun dossier n'est créé à l'import du module.
 - Les événements peuvent être émis depuis des threads : leur ordre relatif
   n'est garanti que là où c'est indiqué ci-dessous.
 
@@ -19,8 +19,12 @@ Dès le lancement, avant toute commande :
 
 ```json
 {"type": "deps", "ok": true}
-{"type": "ready"}
+{"type": "ready", "version": "1.1.0-dev", "protocol": 2}
 ```
+
+- `version` : version sémantique du worker (chaîne).
+- `protocol` : entier de version du contrat JSON (v1.0 implicite = pas de champs ;
+  v1.1 = `2`). Les clients v1.0 peuvent ignorer les champs supplémentaires.
 
 Si `pyaudio` ou `faster_whisper` est introuvable :
 `{"type": "deps", "ok": false, "error": "<message ImportError>"}` puis `ready`
@@ -46,20 +50,45 @@ Clés inconnues ignorées ; valeur invalide → valeur par défaut.
 | Clé | Valeurs | Défaut |
 |---|---|---|
 | `language` | `auto`, `en`, `fr`, `de`, `es`, `it`, `ja`, `zh`, `nl`, `uk`, `pt`, `ru` | `fr` |
-| `model_size` | `tiny`, `base`, `small`, `medium`, `large-v3` | `base` |
+| `model_size` | `tiny`, `base`, `small`, `medium`, `large-v3` | `small` |
 | `device` | `auto`, `cpu`, `cuda` (CUDA seulement si `nvidia-smi -L` voit un GPU, repli CPU) | `auto` |
 | `compute_type` | `int8`, `int8_float16`, `float16`, `float32` | `int8` |
 | `transcription_profile` | `fast`, `balanced`, `accurate` | `fast` |
 | `max_record_seconds` | entier, borné à [0, 600] ; 0 = pas d'arrêt automatique | `90` |
+| `models_dir` | chemin absolu ou relatif (voir résolution ci-dessous) | `null` (voir env.) |
+| `offline` | booléen : `true` → `local_files_only` (aucun téléchargement HF) | `false` |
+| `app_id` | identifiant court (journal séparé par application) | `null` |
 
-Les modèles sont téléchargés (Hugging Face) dans `~/Documents/CyberScribeNote/models`.
+**Dossier des modèles**
+
+- Variable d'environnement : `SCRIBE_VOICE_MODELS_DIR` (chemin du dossier racine ou d'un modèle CT2).
+- Priorité : `config.models_dir` **>** `SCRIBE_VOICE_MODELS_DIR` **>** défaut
+  `~/Documents/CyberScribeNote/models` (téléchargements Hugging Face si `offline` = false).
+
+**Résolution** (ordre, pour un `model_size` donné) :
+
+1. Si `models_dir` pointe déjà sur un dossier CTranslate2 (`model.bin` ou `model.bin.index`),
+   ce chemin est chargé tel quel (indépendamment de `model_size`).
+2. Sinon, sous la racine `models_dir` :
+   - dossiers plats : `{model_size}/`, `faster-whisper-{model_size}/`, `whisper-{model_size}/` ;
+   - cache Hugging Face : `models--Systran--faster-whisper-{model_size}/snapshots/<hash>/`
+     (également sous `hub/` si présent).
+3. Si `offline` = true et aucun chemin local valide : événement `error` explicite, pas de téléchargement.
+4. Si `offline` = false et racine configurée sans correspondance locale : `model_size` est passé à
+   faster-whisper avec `download_root` = cette racine (comportement HF habituel).
+
+**Journal**
+
+- Par défaut : `~/Documents/CyberScribeNote/voice_worker.log`.
+- Avec `app_id` : `~/Documents/CyberScribeNote/<app_id>/voice_worker.log`.
+- Le fichier est créé au démarrage du worker (`main`), pas à l'import du module.
 
 ## Événements (stdout)
 
 | Type | Champs | Quand |
 |---|---|---|
 | `deps` | `ok` (bool), `error` (str, si `ok` = false) | Démarrage. |
-| `ready` | — | Démarrage, après `deps`. |
+| `ready` | `version` (str), `protocol` (int) | Démarrage, après `deps`. |
 | `status` | `recording` (false), `depsOk` (true) | Fin de `init` / `preload` réussi. |
 | `model` | `loading` (bool), `loaded` (bool) | Début (`loading: true, loaded: false`) et fin de chargement ; `preload` en émet un de plus. Un échec peut émettre plusieurs fois `loaded: false`. |
 | `recording` | `active` (bool) | `true` ~0,22 s après `toggle` (après le bip), `false` à l'arrêt. |
@@ -70,12 +99,13 @@ Les modèles sont téléchargés (Hugging Face) dans `~/Documents/CyberScribeNot
 
 Messages d'erreur courants : `Worker non initialisé` (toggle avant init),
 `Transcription encore en cours — patientez.`, `Microphone : …`, `Micro indisponible : …`,
-`Chargement modèle : …`, `Timeout chargement modèle Whisper`, `Transcription : …`.
+`Chargement modèle : …` (dossier absent, modèle introuvable en hors ligne, etc.),
+`Timeout chargement modèle Whisper`, `Transcription : …`.
 
 ## Séquence type d'une dictée
 
 ```
-→ {"cmd":"init","config":{"language":"fr","model_size":"base"}}
+→ {"cmd":"init","config":{"language":"fr","model_size":"small"}}
 ← {"type":"model","loading":true,"loaded":false}
 ← {"type":"status","recording":false,"depsOk":true}
 ← {"type":"model","loading":false,"loaded":true}
@@ -112,3 +142,4 @@ halluciner « Scribe » sur le silence :
   `recording` `active:true` résiduel.
 
 Ce comportement est couvert par `tests/test_transcriber.py` et `tests/test_protocol.py`.
+La résolution des modèles et le mode hors ligne sont couverts par `tests/test_models.py`.
