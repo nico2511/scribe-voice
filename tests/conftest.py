@@ -49,7 +49,12 @@ class WorkerProcess:
             "PYTHONUNBUFFERED": "1",
             # PATH sans nvidia-smi garanti n'est pas nécessaire : absence de GPU -> CPU.
         })
-        for key in ("FAKE_PYAUDIO_IMPORT_ERROR", "FAKE_PYAUDIO_FAIL_OPEN", "FAKE_WHISPER"):
+        for key in (
+            "FAKE_PYAUDIO_IMPORT_ERROR",
+            "FAKE_PYAUDIO_FAIL_OPEN",
+            "FAKE_WHISPER",
+            "FAKE_VAD",
+        ):
             env.pop(key, None)
         env.update(env_extra or {})
         self.home = home

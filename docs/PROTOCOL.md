@@ -90,15 +90,25 @@ Messages d'erreur courants : `Worker non initialisé` (toggle avant init),
 
 ## Commandes vocales courtes « Scribe, … »
 
-Pour que les ordres brefs adressés à l'assistant ne soient pas perdus :
+Pour que les ordres brefs adressés à l'assistant ne soient pas perdus, sans
+halluciner « Scribe » sur le silence :
 
-- chaque passe Whisper reçoit `initial_prompt="Scribe."` et `hotwords="Scribe"` ;
+- chaque passe Whisper reçoit `initial_prompt="Scribe."` (sans `hotwords`) ;
 - audio < 0,35 s ou RMS < 60 → `transcript` vide, sans appel au modèle ;
-- le **VAD** (Silero) n'est activé que si l'audio dure **≥ 3,5 s**
+- si l'audio dure **< 8 s**, une **porte VAD** (Silero via `faster_whisper.vad`,
+  détection seulement sur le PCM) doit détecter de la parole ; sinon `transcript`
+  vide sans passe Whisper ;
+- le **VAD Whisper** n'est activé que si l'audio dure **≥ 3,5 s**
   (`condition_on_previous_text` suit la même règle) ;
+- sur les clips **< 3,5 s**, les segments dont `no_speech_prob > 0,6` sont ignorés ;
+- si le texte final ne contient que le mot-clé « Scribe » (casse / accents ignorés),
+  `transcript` vide ;
 - si le résultat est vide et que l'audio dure **< 8 s**, nouvelle passe **sans VAD**,
   `condition_on_previous_text=false`, `no_speech_threshold=0.35` ;
-- si la version de faster-whisper refuse `hotwords` / `without_timestamps`
-  (`TypeError`), la passe est relancée sans ces deux paramètres.
+- si la version de faster-whisper refuse `without_timestamps` (`TypeError`),
+  la passe est relancée sans ce paramètre ;
+- un second `toggle` reçu pendant le délai de démarrage (~220 ms) **annule**
+  l'enregistrement : `recording` `active:false` puis `transcript` vide, sans
+  `recording` `active:true` résiduel.
 
 Ce comportement est couvert par `tests/test_transcriber.py` et `tests/test_protocol.py`.
