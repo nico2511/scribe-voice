@@ -150,7 +150,11 @@ def test_full_dictation_cycle_short_scribe_command(worker_factory, tmp_path):
     w.send(INIT)
     w.wait_type("model", loaded=True)
     tr = _dictate(w, 1.2)
-    assert tr == {"type": "transcript", "text": "Scribe, corrige le texte."}
+    assert tr["text"] == "Scribe, corrige le texte."
+    assert tr.get("command") == {
+        "keyword": "Scribe",
+        "text": "corrige le texte.",
+    }
     c = _read_calls(calls)
     assert len(c) == 1
     # Commande courte « Scribe, … » (< 3,5 s) : pas de VAD Whisper, prompt Scribe seul.

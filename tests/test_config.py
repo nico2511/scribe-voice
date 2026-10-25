@@ -29,6 +29,8 @@ def test_valid_values_kept_and_normalized():
         "models_dir": None,
         "offline": False,
         "app_id": None,
+        "keyword": "Scribe",
+        "keyword_aliases": [],
     }
 
 
