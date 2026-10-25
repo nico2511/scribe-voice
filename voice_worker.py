@@ -23,12 +23,19 @@ import sys
 import tempfile
 import threading
 import traceback
-import unicodedata
 import wave
 from typing import Any
 
+from voice_keyword import (
+    COMMAND_PROMPT,
+    KeywordConfig,
+    classify_confirmation,
+    is_keyword_only,
+    transcript_command_payload,
+)
+
 WORKER_VERSION = "1.1.0-dev"
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DOWNLOAD_ROOT = os.path.join(
@@ -90,6 +97,8 @@ DEFAULT_CONFIG = {
     "models_dir": None,
     "offline": False,
     "app_id": None,
+    "keyword": "Scribe",
+    "keyword_aliases": [],
 }
 
 _HF_REPO_PREFIX = "models--Systran--faster-whisper-"
@@ -139,24 +148,9 @@ PROFILE_PRESETS = {
 
 _emit_lock = threading.Lock()
 
-# Biais ASR : le mot-clé seul (pas une commande complète, pour limiter
-# les hallucinations du type « Scribe, corrige » sur un silence).
-COMMAND_PROMPT = "Scribe."
-
-_KEYWORD_ONLY_RE = re.compile(r"^(scribe[\s.,;:!?…]*)+$", re.IGNORECASE)
-
-
-def _strip_accents(text: str) -> str:
-    nfkd = unicodedata.normalize("NFKD", text)
-    return "".join(c for c in nfkd if not unicodedata.combining(c))
-
-
-def _is_keyword_only(text: str) -> bool:
-    """Vrai si le texte ne contient que le mot-clé « Scribe » (casse / accents ignorés)."""
-    normalized = _strip_accents(text.strip())
-    if not normalized:
-        return False
-    return bool(_KEYWORD_ONLY_RE.match(normalized))
+def _is_keyword_only(text: str, config: dict[str, Any] | None = None) -> bool:
+    """Vrai si le texte ne contient que le mot-clé (ou alias) configuré."""
+    return is_keyword_only(text, config)
 
 
 def log(msg: str) -> None:
@@ -393,6 +387,16 @@ def sanitize_config(data: dict[str, Any] | None) -> dict[str, Any]:
     cfg["max_record_seconds"] = max(0, min(max_seconds, 600))
     cfg["offline"] = _coerce_bool(cfg.get("offline"))
     cfg["app_id"] = _sanitize_app_id(cfg.get("app_id"))
+    kw = str(cfg.get("keyword") or DEFAULT_CONFIG["keyword"]).strip()
+    cfg["keyword"] = kw[:120] if kw else DEFAULT_CONFIG["keyword"]
+    raw_aliases = data.get("keyword_aliases") if isinstance(data, dict) else None
+    aliases: list[str] = []
+    if isinstance(raw_aliases, list):
+        for item in raw_aliases:
+            s = str(item).strip()
+            if s:
+                aliases.append(s[:120])
+    cfg["keyword_aliases"] = aliases[:32]
     explicit_dir = data.get("models_dir") if isinstance(data, dict) else None
     if explicit_dir is not None and str(explicit_dir).strip():
         cfg["models_dir"] = _normalize_models_dir(explicit_dir)
@@ -733,13 +737,50 @@ class Transcriber:
                         condition=False,
                         no_speech=0.35,
                     )
-                if _is_keyword_only(text):
+                if _is_keyword_only(text, self.config):
                     log("keyword-only transcript filtered — skip")
                     return ""
                 log(f"Transcription done ({len(text)} chars): {text[:180]!r}")
                 return text
             except Exception as exc:
                 log_error(f"transcribe: {exc}\n{traceback.format_exc()}")
+                emit({"type": "error", "message": f"Transcription : {exc}"})
+                return None
+
+    def transcribe_confirmation(self, audio_path: str) -> str | None:
+        """Transcription courte pour ``confirm`` (sans filtre mot-clé seul)."""
+        if not self.model:
+            if not self.loading and not self.loaded_event.is_set():
+                return None
+            if not self.loaded_event.wait(timeout=120):
+                emit({"type": "error", "message": "Timeout chargement modèle Whisper"})
+                return None
+        if not self.model:
+            return None
+
+        duration, rms = _wav_stats(audio_path)
+        log(f"Confirm transcribe {audio_path} duration={duration:.2f}s rms={rms:.1f}")
+        if duration < 0.25 or rms < 60:
+            return ""
+
+        with self._transcribe_lock:
+            try:
+                lang = self.config.get("language")
+                if lang == "auto":
+                    lang = None
+                preset = PROFILE_PRESETS["fast"]
+                text = self._transcribe_once(
+                    audio_path,
+                    lang,
+                    preset,
+                    duration=duration,
+                    vad=False,
+                    condition=False,
+                    no_speech=0.35,
+                )
+                return text or ""
+            except Exception as exc:
+                log_error(f"transcribe_confirmation: {exc}\n{traceback.format_exc()}")
                 emit({"type": "error", "message": f"Transcription : {exc}"})
                 return None
 
@@ -790,7 +831,7 @@ class Transcriber:
                 else preset["no_speech_threshold"]
             ),
             "log_prob_threshold": preset["log_prob_threshold"],
-            "initial_prompt": COMMAND_PROMPT,
+            "initial_prompt": KeywordConfig.from_config(self.config).initial_prompt(),
             "without_timestamps": True,
         }
         if vad:
@@ -822,6 +863,8 @@ class VoiceWorker:
         self._start_timer: threading.Timer | None = None
         self._starting = False
         self._transcribe_busy = False
+        self._confirm_busy = False
+        self._confirm_timer: threading.Timer | None = None
 
     def init(self, config: dict[str, Any] | None) -> None:
         self.config = sanitize_config(config)
@@ -859,6 +902,12 @@ class VoiceWorker:
     def _start(self) -> None:
         if not self.recorder:
             emit({"type": "error", "message": "Worker non initialisé"})
+            return
+        if self._confirm_busy:
+            emit({
+                "type": "error",
+                "message": "Confirmation en cours — patientez.",
+            })
             return
         if self._transcribe_busy:
             emit({"type": "error", "message": "Transcription encore en cours — patientez."})
@@ -935,8 +984,91 @@ class VoiceWorker:
             except Exception:
                 pass
             emit({"type": "transcribing", "active": False})
-            emit({"type": "transcript", "text": text})
+            payload: dict[str, Any] = {"type": "transcript", "text": text}
+            command = transcript_command_payload(text, self.config)
+            if command:
+                payload["command"] = command
+            emit(payload)
             self._transcribe_busy = False
+
+    def confirm(self, timeout_sec: float) -> None:
+        if not self.recorder:
+            emit({"type": "error", "message": "Worker non initialisé"})
+            return
+        if self.recording or self._starting:
+            emit({
+                "type": "error",
+                "message": (
+                    "Confirmation impossible : enregistrement dictée en cours."
+                ),
+            })
+            return
+        if self._transcribe_busy:
+            emit({
+                "type": "error",
+                "message": (
+                    "Confirmation impossible : transcription dictée en cours."
+                ),
+            })
+            return
+        if self._confirm_busy:
+            emit({
+                "type": "error",
+                "message": "Confirmation déjà en cours — patientez.",
+            })
+            return
+        if not self.transcriber:
+            emit({"type": "error", "message": "Worker non initialisé"})
+            return
+
+        self._confirm_busy = True
+        if not self.recorder.start():
+            self._confirm_busy = False
+            return
+
+        def _finish() -> None:
+            self._confirm_timer = None
+            audio_path = self.recorder.stop() if self.recorder else None
+            if not audio_path:
+                emit({
+                    "type": "confirmation",
+                    "answer": "unknown",
+                    "text": "",
+                })
+                self._confirm_busy = False
+                return
+            threading.Thread(
+                target=self._process_confirmation,
+                args=(audio_path,),
+                daemon=True,
+            ).start()
+
+        if self._confirm_timer:
+            self._confirm_timer.cancel()
+        self._confirm_timer = threading.Timer(timeout_sec, _finish)
+        self._confirm_timer.daemon = True
+        self._confirm_timer.start()
+
+    def _process_confirmation(self, audio_path: str) -> None:
+        text = ""
+        try:
+            if self.transcriber:
+                text = self.transcriber.transcribe_confirmation(audio_path) or ""
+        except Exception as exc:
+            log_error(f"process_confirmation: {exc}\n{traceback.format_exc()}")
+            emit({"type": "error", "message": f"Confirmation : {exc}"})
+        finally:
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+            answer = classify_confirmation(text)
+            emit({
+                "type": "confirmation",
+                "answer": answer,
+                "text": text,
+            })
+            self._confirm_busy = False
 
     def shutdown(self) -> None:
         log("shutdown")
@@ -992,6 +1124,14 @@ def main() -> None:
                     break
                 elif cmd == "ping":
                     emit({"type": "pong"})
+                elif cmd == "confirm":
+                    raw_timeout = req.get("timeout", 4)
+                    try:
+                        timeout_sec = float(raw_timeout)
+                    except (TypeError, ValueError):
+                        timeout_sec = 4.0
+                    timeout_sec = max(0.5, min(timeout_sec, 30.0))
+                    worker.confirm(timeout_sec)
                 else:
                     emit({"type": "error", "message": f"Commande inconnue : {cmd}"})
             except Exception as exc:
