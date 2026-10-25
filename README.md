@@ -22,7 +22,7 @@ le lancer comme sous-processus avec stdin/stdout en pipes :
 import json, subprocess
 p = subprocess.Popen(["voice_worker.exe"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 send = lambda o: (p.stdin.write((json.dumps(o) + "\n").encode()), p.stdin.flush())
-send({"cmd": "init", "config": {"language": "fr", "model_size": "base"}})
+send({"cmd": "init", "config": {"language": "fr", "model_size": "small"}})
 send({"cmd": "toggle"})   # démarre l'enregistrement
 # ... parler ...
 send({"cmd": "toggle"})   # arrête -> événements transcribing / transcript
@@ -35,8 +35,30 @@ send({"cmd": "shutdown"})
 
 Depuis les sources : `pip install -r requirements.txt` puis `python voice_worker.py`.
 
-- Modèles : `~/Documents/CyberScribeNote/models` (téléchargés au premier `init`).
-- Journal : `~/Documents/CyberScribeNote/voice_worker.log` (stdout reste réservé au protocole).
+- Modèles : par défaut `~/Documents/CyberScribeNote/models` (téléchargés au premier `init`
+  si `offline` est false). Pour un dossier local (ex. disque D: sous Windows) :
+
+```python
+send({
+    "cmd": "init",
+    "config": {
+        "language": "fr",
+        "model_size": "small",
+        "models_dir": r"D:\models\cyberscribe_models",
+        "offline": True,
+    },
+})
+```
+
+  Équivalent côté processus : variable d'environnement `SCRIBE_VOICE_MODELS_DIR`
+  (surchargée par `models_dir` dans `init`). Le worker accepte une racine de cache
+  Hugging Face (`models--Systran--faster-whisper-small/...`), des dossiers plats
+  (`small/`, `faster-whisper-small/`) ou un chemin direct vers un modèle CTranslate2.
+  Voir [docs/PROTOCOL.md](docs/PROTOCOL.md#configuration-config).
+
+- Journal : `~/Documents/CyberScribeNote/voice_worker.log` (ou
+  `~/Documents/CyberScribeNote/<app_id>/voice_worker.log` si `app_id` est fourni).
+  stdout reste réservé au protocole.
 
 ## Protocole (résumé)
 
