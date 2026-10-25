@@ -17,11 +17,13 @@ import faulthandler
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import threading
 import traceback
+import unicodedata
 import wave
 from typing import Any
 
@@ -108,7 +110,21 @@ _emit_lock = threading.Lock()
 # Biais ASR : le mot-clé seul (pas une commande complète, pour limiter
 # les hallucinations du type « Scribe, corrige » sur un silence).
 COMMAND_PROMPT = "Scribe."
-COMMAND_HOTWORDS = "Scribe"
+
+_KEYWORD_ONLY_RE = re.compile(r"^(scribe[\s.,;:!?…]*)+$", re.IGNORECASE)
+
+
+def _strip_accents(text: str) -> str:
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def _is_keyword_only(text: str) -> bool:
+    """Vrai si le texte ne contient que le mot-clé « Scribe » (casse / accents ignorés)."""
+    normalized = _strip_accents(text.strip())
+    if not normalized:
+        return False
+    return bool(_KEYWORD_ONLY_RE.match(normalized))
 
 
 def log(msg: str) -> None:
@@ -470,6 +486,10 @@ class Transcriber:
             log("audio too short or too quiet — skip")
             return ""
 
+        if duration < 8 and not self._has_speech(audio_path):
+            log("no speech detected (VAD gate) — skip")
+            return ""
+
         with self._transcribe_lock:
             try:
                 lang = self.config.get("language")
@@ -483,6 +503,7 @@ class Transcriber:
                     audio_path,
                     lang,
                     preset,
+                    duration=duration,
                     vad=use_vad,
                     condition=duration >= 3.5,
                 )
@@ -492,10 +513,14 @@ class Transcriber:
                         audio_path,
                         lang,
                         preset,
+                        duration=duration,
                         vad=False,
                         condition=False,
                         no_speech=0.35,
                     )
+                if _is_keyword_only(text):
+                    log("keyword-only transcript filtered — skip")
+                    return ""
                 log(f"Transcription done ({len(text)} chars): {text[:180]!r}")
                 return text
             except Exception as exc:
@@ -503,12 +528,35 @@ class Transcriber:
                 emit({"type": "error", "message": f"Transcription : {exc}"})
                 return None
 
+    def _has_speech(self, audio_path: str) -> bool:
+        """Détection Silero (faster-whisper) : parole présente dans le WAV 16 kHz."""
+        try:
+            import numpy as np
+            from faster_whisper.vad import get_speech_timestamps
+
+            with wave.open(audio_path, "rb") as wf:
+                rate = wf.getframerate() or 16000
+                if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                    log("VAD gate: format WAV inattendu — assume speech")
+                    return True
+                frames = wf.readframes(wf.getnframes())
+            if rate != 16000:
+                log(f"VAD gate: sample rate {rate} — assume speech")
+                return True
+            audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+            timestamps = get_speech_timestamps(audio, sampling_rate=16000)
+            return bool(timestamps)
+        except Exception as exc:
+            log(f"VAD gate failed — assume speech: {exc}")
+            return True
+
     def _transcribe_once(
         self,
         audio_path: str,
         lang: str | None,
         preset: dict[str, Any],
         *,
+        duration: float,
         vad: bool,
         condition: bool,
         no_speech: float | None = None,
@@ -528,7 +576,6 @@ class Transcriber:
             ),
             "log_prob_threshold": preset["log_prob_threshold"],
             "initial_prompt": COMMAND_PROMPT,
-            "hotwords": COMMAND_HOTWORDS,
             "without_timestamps": True,
         }
         if vad:
@@ -538,10 +585,16 @@ class Transcriber:
         try:
             segments, _info = self.model.transcribe(audio_path, **kwargs)
         except TypeError:
-            kwargs.pop("hotwords", None)
             kwargs.pop("without_timestamps", None)
             segments, _info = self.model.transcribe(audio_path, **kwargs)
-        return "".join(segment.text for segment in segments).strip()
+        segment_list = list(segments)
+        if duration < 3.5:
+            segment_list = [
+                s
+                for s in segment_list
+                if getattr(s, "no_speech_prob", 0.0) <= 0.6
+            ]
+        return "".join(segment.text for segment in segment_list).strip()
 
 
 class VoiceWorker:
@@ -551,6 +604,8 @@ class VoiceWorker:
         self.transcriber: Transcriber | None = None
         self.recording = False
         self.auto_stop_timer: threading.Timer | None = None
+        self._start_timer: threading.Timer | None = None
+        self._starting = False
         self._transcribe_busy = False
 
     def init(self, config: dict[str, Any] | None) -> None:
@@ -592,10 +647,23 @@ class VoiceWorker:
         if self._transcribe_busy:
             emit({"type": "error", "message": "Transcription encore en cours — patientez."})
             return
+        if self._starting:
+            if self._start_timer:
+                self._start_timer.cancel()
+                self._start_timer = None
+            self._starting = False
+            emit({"type": "recording", "active": False})
+            emit({"type": "transcript", "text": ""})
+            return
         # Bip hors micro pour ne pas polluer l'audio / PortAudio
         self._beep(600, 160)
+        self._starting = True
 
         def _begin() -> None:
+            if not self._starting:
+                return
+            self._starting = False
+            self._start_timer = None
             if not self.recorder or self.recording:
                 return
             if not self.recorder.start():
@@ -610,9 +678,9 @@ class VoiceWorker:
                 self.auto_stop_timer.daemon = True
                 self.auto_stop_timer.start()
 
-        timer = threading.Timer(0.22, _begin)
-        timer.daemon = True
-        timer.start()
+        self._start_timer = threading.Timer(0.22, _begin)
+        self._start_timer.daemon = True
+        self._start_timer.start()
 
     def _auto_stop(self) -> None:
         if self.recording:
@@ -631,12 +699,12 @@ class VoiceWorker:
         if not audio_path:
             emit({"type": "transcript", "text": ""})
             return
+        self._transcribe_busy = True
         threading.Thread(
             target=self._process_audio, args=(audio_path,), daemon=True
         ).start()
 
     def _process_audio(self, audio_path: str) -> None:
-        self._transcribe_busy = True
         emit({"type": "transcribing", "active": True})
         text = ""
         try:

@@ -152,11 +152,11 @@ def test_full_dictation_cycle_short_scribe_command(worker_factory, tmp_path):
     assert tr == {"type": "transcript", "text": "Scribe, corrige le texte."}
     c = _read_calls(calls)
     assert len(c) == 1
-    # Commande courte « Scribe, … » (< 3,5 s) : pas de VAD, prompt/hotword Scribe.
+    # Commande courte « Scribe, … » (< 3,5 s) : pas de VAD Whisper, prompt Scribe seul.
     assert c[0]["vad_filter"] is False
     assert "vad_parameters" not in c[0]
     assert c[0]["initial_prompt"] == "Scribe."
-    assert c[0]["hotwords"] == "Scribe"
+    assert "hotwords" not in c[0]
     assert c[0]["condition_on_previous_text"] is False
     w.send({"cmd": "shutdown"})
     assert w.close() == 0
@@ -185,6 +185,59 @@ def test_silent_recording_gives_empty_transcript_without_model_call(worker_facto
     w.send(INIT)
     w.wait_type("model", loaded=True)
     tr = _dictate(w, 0.8)
+    assert tr == {"type": "transcript", "text": ""}
+    assert _read_calls(calls) == []
+    w.send({"cmd": "shutdown"})
+    assert w.close() == 0
+
+
+def test_double_toggle_during_start_cancels_recording(worker_factory, tmp_path):
+    fw, calls = _fake_whisper(tmp_path)
+    w = worker_factory(FAKE_WHISPER=fw)
+    w.wait_type("ready")
+    w.send(INIT)
+    w.wait_type("model", loaded=True)
+    w.send({"cmd": "toggle"})
+    time.sleep(0.05)
+    w.send({"cmd": "toggle"})
+    w.wait_type("recording", active=False)
+    tr = w.wait_type("transcript")
+    assert tr == {"type": "transcript", "text": ""}
+    assert not any(e.get("type") == "recording" and e.get("active") is True for e in w.events)
+    assert _read_calls(calls) == []
+    w.send({"cmd": "shutdown"})
+    assert w.close() == 0
+
+
+def test_transcribe_busy_before_processing_thread(worker_factory, tmp_path):
+    fw, _ = _fake_whisper(tmp_path, texts=["Scribe, test."])
+    w = worker_factory(FAKE_WHISPER=fw)
+    w.wait_type("ready")
+    w.send(INIT)
+    w.wait_type("model", loaded=True)
+    w.send({"cmd": "toggle"})
+    w.wait_type("recording", active=True)
+    time.sleep(1.0)
+    w.send({"cmd": "toggle"})
+    w.wait_type("recording", active=False)
+    # Le worker doit refuser un nouveau toggle tant que la transcription n'est pas finie.
+    w.send({"cmd": "toggle"})
+    err = w.wait_type("error")
+    assert "Transcription encore en cours" in err["message"]
+    assert any(e == {"type": "transcribing", "active": True} for e in w.events)
+    tr = w.wait_type("transcript", timeout=30)
+    assert tr["text"] == "Scribe, test."
+    w.send({"cmd": "shutdown"})
+    assert w.close() == 0
+
+
+def test_vad_gate_no_speech_skips_model(worker_factory, tmp_path):
+    fw, calls = _fake_whisper(tmp_path, texts=["Scribe Scribe."])
+    w = worker_factory(FAKE_WHISPER=fw, FAKE_VAD='{"has_speech": false}')
+    w.wait_type("ready")
+    w.send(INIT)
+    w.wait_type("model", loaded=True)
+    tr = _dictate(w, 1.0)
     assert tr == {"type": "transcript", "text": ""}
     assert _read_calls(calls) == []
     w.send({"cmd": "shutdown"})

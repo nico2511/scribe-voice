@@ -1,8 +1,11 @@
 """Tests unitaires du traitement des commandes courtes « Scribe, … ».
 
-Contrat v1.0 (comportement de voice_worker.py, inchangé) :
-  - initial_prompt « Scribe. » et hotwords « Scribe » sur chaque passe ;
-  - VAD seulement si durée >= 3,5 s (et si le profil l'active) ;
+Contrat v1.1 :
+  - initial_prompt « Scribe. » sur chaque passe (sans hotwords) ;
+  - porte VAD (Silero) avant Whisper si durée < 8 s ;
+  - texte mot-clé seul -> "" ;
+  - VAD Whisper seulement si durée >= 3,5 s (et si le profil l'active) ;
+  - segments courts : no_speech_prob > 0,6 ignorés ;
   - transcription vide et durée < 8 s -> nouvelle passe sans VAD, no_speech 0,35 ;
   - audio < 0,35 s ou RMS < 60 -> "" sans appel au modèle.
 """
@@ -17,25 +20,45 @@ import pytest
 
 import voice_worker as vw
 
+_ORIGINAL_HAS_SPEECH = vw.Transcriber._has_speech
+
+
+@pytest.fixture(autouse=True)
+def synthetic_wav_counts_as_speech(monkeypatch):
+    """Les WAV sinusoïdaux des tests ne sont pas de la parole pour Silero réel."""
+    monkeypatch.setattr(
+        vw.Transcriber,
+        "_has_speech",
+        lambda self, _path: True,
+    )
+
 
 class FakeModel:
-    def __init__(self, texts=("Scribe, corrige.",), raise_type_error_once=False):
+    def __init__(
+        self,
+        texts=("Scribe, corrige.",),
+        raise_type_error_once=False,
+        no_speech_probs=None,
+    ):
         self.texts = list(texts)
         self.calls: list[dict] = []
         self.raise_type_error_once = raise_type_error_once
+        self.no_speech_probs = list(no_speech_probs or [])
 
     def transcribe(self, path, **kwargs):
         self.calls.append(dict(kwargs))
         if self.raise_type_error_once:
             self.raise_type_error_once = False
-            raise TypeError("unexpected keyword argument 'hotwords'")
+            raise TypeError("unexpected keyword argument 'without_timestamps'")
         text = self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
+        prob = self.no_speech_probs.pop(0) if self.no_speech_probs else 0.0
 
         class Seg:
-            def __init__(self, t):
+            def __init__(self, t, p):
                 self.text = t
+                self.no_speech_prob = p
 
-        return iter([Seg(" " + text)] if text else []), None
+        return iter([Seg(" " + text, prob)] if text else []), None
 
 
 def make_transcriber(model, **config):
@@ -67,7 +90,61 @@ def make_wav(tmp_path, seconds, amplitude=3000, rate=16000):
 
 def test_command_constants():
     assert vw.COMMAND_PROMPT == "Scribe."
-    assert vw.COMMAND_HOTWORDS == "Scribe"
+
+
+@pytest.mark.parametrize("raw", ["Scribe Scribe.", "scribe", "SCRIBE !"])
+def test_keyword_only_filtered(tmp_path, raw):
+    m = FakeModel([raw])
+    t = make_transcriber(m)
+    assert t.transcribe(make_wav(tmp_path, 1.5)) == ""
+
+
+def test_real_scribe_command_preserved(tmp_path):
+    m = FakeModel(["Scribe, corrige le texte."])
+    t = make_transcriber(m)
+    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Scribe, corrige le texte."
+
+
+def test_is_keyword_only_helper():
+    assert vw._is_keyword_only("Scribe Scribe.")
+    assert vw._is_keyword_only("SCRIBE !")
+    assert not vw._is_keyword_only("Scribe, corrige le texte.")
+
+
+def test_has_speech_false_skips_model(tmp_path, monkeypatch):
+    m = FakeModel(["Scribe, traduis."])
+    t = make_transcriber(m)
+    monkeypatch.setattr(t, "_has_speech", lambda _path: False)
+    assert t.transcribe(make_wav(tmp_path, 1.5)) == ""
+    assert m.calls == []
+
+
+def test_has_speech_failure_allows_transcription(tmp_path, monkeypatch):
+    m = FakeModel(["Scribe, corrige."])
+    t = make_transcriber(m)
+    monkeypatch.setattr(vw.Transcriber, "_has_speech", _ORIGINAL_HAS_SPEECH)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("vad indisponible")
+
+    monkeypatch.setattr("faster_whisper.vad.get_speech_timestamps", _boom)
+    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Scribe, corrige."
+    assert len(m.calls) >= 1
+
+
+def test_short_clip_drops_high_no_speech_segment(tmp_path):
+    m = FakeModel(["Scribe Scribe."], no_speech_probs=[0.9])
+    t = make_transcriber(m)
+    preset = vw.PROFILE_PRESETS["fast"]
+    out = t._transcribe_once(
+        make_wav(tmp_path, 2.0),
+        "fr",
+        preset,
+        duration=2.0,
+        vad=False,
+        condition=False,
+    )
+    assert out == ""
 
 
 @pytest.mark.parametrize("seconds", [1.0, 2.0, 3.49])
@@ -81,7 +158,7 @@ def test_short_scribe_command_no_vad(tmp_path, seconds):
     assert "vad_parameters" not in c
     assert c["condition_on_previous_text"] is False
     assert c["initial_prompt"] == "Scribe."
-    assert c["hotwords"] == "Scribe"
+    assert "hotwords" not in c
     assert c["without_timestamps"] is True
     assert c["language"] == "fr"
     assert c["beam_size"] == 1 and c["best_of"] == 1
@@ -98,7 +175,7 @@ def test_long_dictation_uses_vad(tmp_path, seconds):
     assert c["condition_on_previous_text"] is True
     assert c["no_speech_threshold"] == 0.6
     assert c["initial_prompt"] == "Scribe."
-    assert c["hotwords"] == "Scribe"
+    assert "hotwords" not in c
 
 
 @pytest.mark.parametrize("seconds", [1.5, 5.0, 7.9])
@@ -113,7 +190,7 @@ def test_empty_result_retries_without_vad(tmp_path, seconds):
     assert retry["condition_on_previous_text"] is False
     assert retry["no_speech_threshold"] == 0.35
     assert retry["initial_prompt"] == "Scribe."
-    assert retry["hotwords"] == "Scribe"
+    assert "hotwords" not in retry
 
 
 def test_no_retry_when_8_seconds_or_more(tmp_path):
@@ -137,13 +214,12 @@ def test_too_quiet_audio_skipped(tmp_path):
     assert m.calls == []
 
 
-def test_type_error_fallback_drops_hotwords(tmp_path):
+def test_type_error_fallback_drops_without_timestamps(tmp_path):
     m = FakeModel(["Scribe, corrige."], raise_type_error_once=True)
     t = make_transcriber(m)
     assert t.transcribe(make_wav(tmp_path, 1.5)) == "Scribe, corrige."
     assert len(m.calls) == 2
-    assert "hotwords" in m.calls[0]
-    assert "hotwords" not in m.calls[1]
+    assert "hotwords" not in m.calls[0]
     assert "without_timestamps" not in m.calls[1]
     assert m.calls[1]["initial_prompt"] == "Scribe."
 
@@ -164,6 +240,31 @@ def test_profile_presets_applied(tmp_path, profile):
     assert m.calls[0]["beam_size"] == p["beam_size"]
     assert m.calls[0]["best_of"] == p["best_of"]
     assert m.calls[0]["vad_parameters"] == p["vad_parameters"]
+
+
+def test_transcribe_busy_set_before_audio_thread(tmp_path, monkeypatch):
+    worker = vw.VoiceWorker()
+    worker.recording = True
+    worker.config = vw.sanitize_config({})
+    worker.transcriber = make_transcriber(FakeModel(["ok"]))
+
+    class Rec:
+        def stop(self):
+            return make_wav(tmp_path, 1.0)
+
+    worker.recorder = Rec()
+    busy_at_thread_start: list[bool] = []
+    real_thread = threading.Thread
+
+    def capture_thread(*args, **kwargs):
+        busy_at_thread_start.append(worker._transcribe_busy)
+        return real_thread(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "_beep", lambda *_a, **_k: None)
+    monkeypatch.setattr(threading, "Thread", capture_thread)
+    monkeypatch.setattr(vw, "emit", lambda _payload: None)
+    worker._stop()
+    assert busy_at_thread_start == [True]
 
 
 def test_transcribe_exception_emits_error(tmp_path, capfd):
