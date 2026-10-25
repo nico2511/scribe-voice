@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
 # Événements autorisés sur stdout (contrat v1.0).
 EVENT_TYPES = {
     "deps", "ready", "status", "model", "recording",
-    "transcribing", "transcript", "error", "pong",
+    "transcribing", "transcript", "confirmation", "error", "pong",
 }
 
 

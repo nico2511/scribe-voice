@@ -33,6 +33,28 @@ for line in p.stdout:
 send({"cmd": "shutdown"})
 ```
 
+**Fresh Windows / commandes vocales (v1.1)** — mot-clé configurable et parsing côté worker :
+
+```python
+send({
+    "cmd": "init",
+    "config": {
+        "language": "fr",
+        "model_size": "small",
+        "keyword": "Scribe",
+        "keyword_aliases": ["scribe", "scrybe"],  # variantes ASR
+        "app_id": "fresh-windows",
+    },
+})
+# ... toggle dictée ...
+# evt["type"] == "transcript" :
+#   evt["text"]  -> transcription brute (inchangée pour les clients v1.0)
+#   evt.get("command") -> {"keyword": "Scribe", "text": "ouvre les paramètres."} si la phrase commence par le mot-clé
+
+send({"cmd": "confirm", "timeout": 4})  # écoute courte puis classification oui/non
+# evt["type"] == "confirmation" -> {"answer": "yes"|"no"|"unknown", "text": "..."}
+```
+
 Depuis les sources : `pip install -r requirements.txt` puis `python voice_worker.py`.
 
 - Modèles : par défaut `~/Documents/CyberScribeNote/models` (téléchargés au premier `init`
@@ -64,7 +86,7 @@ send({
 
 | Commandes (stdin) | Événements (stdout) |
 |---|---|
-| `init`, `preload`, `toggle`, `ping`, `shutdown` | `deps`, `ready`, `status`, `model`, `recording`, `transcribing`, `transcript`, `error`, `pong` |
+| `init`, `preload`, `toggle`, `confirm`, `ping`, `shutdown` | `deps`, `ready`, `status`, `model`, `recording`, `transcribing`, `transcript`, `confirmation`, `error`, `pong` |
 
 Spécification complète : [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
