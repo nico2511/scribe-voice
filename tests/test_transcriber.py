@@ -16,6 +16,7 @@ import struct
 import threading
 import wave
 
+import numpy as np
 import pytest
 
 import voice_worker as vw
@@ -42,11 +43,13 @@ class FakeModel:
     ):
         self.texts = list(texts)
         self.calls: list[dict] = []
+        self.audios: list = []
         self.raise_type_error_once = raise_type_error_once
         self.no_speech_probs = list(no_speech_probs or [])
 
-    def transcribe(self, path, **kwargs):
+    def transcribe(self, audio, **kwargs):
         self.calls.append(dict(kwargs))
+        self.audios.append(audio)
         if self.raise_type_error_once:
             self.raise_type_error_once = False
             raise TypeError("unexpected keyword argument 'without_timestamps'")
@@ -90,6 +93,19 @@ def make_wav(tmp_path, seconds, amplitude=3000, rate=16000):
 
 def test_command_constants():
     assert vw.COMMAND_PROMPT == "Scribe."
+
+
+def test_transcribe_passes_float32_ndarray_to_model(tmp_path):
+    m = FakeModel(["Scribe, bonjour."])
+    t = make_transcriber(m)
+    path = make_wav(tmp_path, 1.5)
+    t.transcribe(path)
+    assert len(m.audios) == 1
+    audio = m.audios[0]
+    assert isinstance(audio, np.ndarray)
+    assert audio.dtype == np.float32
+    assert audio.ndim == 1
+    assert len(audio) == int(1.5 * 16000)
 
 
 @pytest.mark.parametrize("raw", ["Scribe Scribe.", "scribe", "SCRIBE !"])
@@ -136,8 +152,9 @@ def test_short_clip_drops_high_no_speech_segment(tmp_path):
     m = FakeModel(["Scribe Scribe."], no_speech_probs=[0.9])
     t = make_transcriber(m)
     preset = vw.PROFILE_PRESETS["fast"]
+    audio = vw._load_wav_mono_float32(make_wav(tmp_path, 2.0))
     out = t._transcribe_once(
-        make_wav(tmp_path, 2.0),
+        audio,
         "fr",
         preset,
         duration=2.0,
