@@ -4,6 +4,7 @@ Usage : python tools/smoke_exe.py dist/voice_worker.exe
 
 Test optionnel (hors réseau, modèle local) si les variables sont définies :
   SCRIBE_SMOKE_MODELS_DIR — dossier contenant un modèle faster-whisper (CTranslate2)
+  SCRIBE_SMOKE_MODEL — taille de modèle (défaut small)
   SCRIBE_SMOKE_WAV — chemin d'un petit WAV mono 16 kHz (sinon un sinus 1 s est généré)
 
 Ce test charge ``voice_worker.py`` via l'interpréteur courant (pas l'exe) : l'exe
@@ -22,6 +23,14 @@ import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+DEFAULT_SMOKE_MODEL = "small"
+
+
+def smoke_model_size() -> str:
+    """Taille de modèle pour le smoke transcription (env SCRIBE_SMOKE_MODEL, défaut small)."""
+    raw = os.environ.get("SCRIBE_SMOKE_MODEL", DEFAULT_SMOKE_MODEL).strip()
+    return raw or DEFAULT_SMOKE_MODEL
 
 
 def _make_sine_wav(path: str, seconds: float = 1.0, rate: int = 16000) -> None:
@@ -63,7 +72,7 @@ def _optional_offline_transcribe() -> bool:
 
     cfg = vw.sanitize_config(
         {
-            "model_size": "tiny",
+            "model_size": smoke_model_size(),
             "device": "cpu",
             "compute_type": "int8",
             "offline": True,

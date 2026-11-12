@@ -109,9 +109,27 @@ def test_preload_waits_and_reports_loaded(worker_factory, tmp_path):
     w.send({"cmd": "preload", "config": {"model_size": "small"}})
     w.wait_type("status", recording=False, depsOk=True)
     w.wait_type("model", loaded=True)
-    # preload est bloquant : le ping n'est traité qu'après le chargement.
     w.send({"cmd": "ping"})
     w.wait_type("pong")
+    w.send({"cmd": "shutdown"})
+    assert w.close() == 0
+
+
+def test_ping_during_preload_without_waiting_load(worker_factory, tmp_path):
+    """preload charge le modèle en arrière-plan : ping renvoie pong tout de suite."""
+    fw, _ = _fake_whisper(tmp_path, load_delay_sec=2.0)
+    w = worker_factory(FAKE_WHISPER=fw)
+    w.wait_type("ready")
+    w.send({"cmd": "preload", "config": {"model_size": "small"}})
+    w.wait_type("model", loading=True, loaded=False)
+    t0 = time.monotonic()
+    w.send({"cmd": "ping"})
+    assert w.wait_type("pong", timeout=1) == {"type": "pong"}
+    assert time.monotonic() - t0 < 1.0
+    assert any(
+        e == {"type": "status", "recording": False, "depsOk": True} for e in w.events
+    )
+    w.wait_type("model", loaded=True, timeout=30)
     w.send({"cmd": "shutdown"})
     assert w.close() == 0
 
@@ -244,6 +262,51 @@ def test_vad_gate_no_speech_skips_model(worker_factory, tmp_path):
     w.wait_type("model", loaded=True)
     tr = _dictate(w, 1.0)
     assert tr == {"type": "transcript", "text": ""}
+    assert _read_calls(calls) == []
+    w.send({"cmd": "shutdown"})
+    assert w.close() == 0
+
+
+def test_start_stop_idempotent_ptt(worker_factory, tmp_path):
+    fw, calls = _fake_whisper(tmp_path, texts=["Scribe, salut."])
+    w = worker_factory(FAKE_WHISPER=fw)
+    w.wait_type("ready")
+    w.send(INIT)
+    w.wait_type("model", loaded=True)
+    w.send({"cmd": "start"})
+    w.wait_type("recording", active=True)
+    w.send({"cmd": "start"})
+    assert w.wait_type("recording", active=True) == {"type": "recording", "active": True}
+    time.sleep(0.8)
+    w.send({"cmd": "stop"})
+    w.wait_type("recording", active=False)
+    w.wait_type("transcribing", active=True, timeout=30)
+    w.wait_type("transcribing", active=False, timeout=30)
+    tr = w.wait_type("transcript", timeout=30)
+    assert tr["text"] == "Scribe, salut."
+    w.send({"cmd": "stop"})
+    assert w.wait_type("recording", active=False, timeout=2) == {
+        "type": "recording",
+        "active": False,
+    }
+    # pas de second transcript vide
+    w.drain(0.3)
+    transcripts = [e for e in w.events if e.get("type") == "transcript"]
+    assert len(transcripts) == 1
+    w.send({"cmd": "shutdown"})
+    assert w.close() == 0
+
+
+def test_stop_without_recording_no_transcript(worker_factory, tmp_path):
+    fw, calls = _fake_whisper(tmp_path)
+    w = worker_factory(FAKE_WHISPER=fw)
+    w.wait_type("ready")
+    w.send(INIT)
+    w.wait_type("model", loaded=True)
+    w.send({"cmd": "stop"})
+    assert w.wait_type("recording", active=False) == {"type": "recording", "active": False}
+    w.drain(0.5)
+    assert not any(e.get("type") == "transcript" for e in w.events)
     assert _read_calls(calls) == []
     w.send({"cmd": "shutdown"})
     assert w.close() == 0

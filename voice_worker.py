@@ -84,8 +84,8 @@ from voice_keyword import (
     transcript_command_payload,
 )
 
-WORKER_VERSION = "1.1.0-dev"
-PROTOCOL_VERSION = 3
+WORKER_VERSION = "1.1.0"
+PROTOCOL_VERSION = 4
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DOWNLOAD_ROOT = os.path.join(
@@ -265,6 +265,13 @@ def _coerce_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return False
+
+
+def _log_transcripts_enabled(config: dict[str, Any] | None = None) -> bool:
+    """Vrai si le texte transcrit peut figurer dans voice_worker.log (débogage)."""
+    if isinstance(config, dict) and "log_transcripts" in config:
+        return _coerce_bool(config.get("log_transcripts"))
+    return _coerce_bool(os.environ.get("SCRIBE_VOICE_LOG_TRANSCRIPTS"))
 
 
 def _sanitize_app_id(value: Any) -> str | None:
@@ -820,7 +827,10 @@ class Transcriber:
                 if _is_keyword_only(text, self.config):
                     log("keyword-only transcript filtered — skip")
                     return ""
-                log(f"Transcription done ({len(text)} chars): {text[:180]!r}")
+                if _log_transcripts_enabled(self.config):
+                    log(f"Transcription done ({len(text)} chars): {text[:180]!r}")
+                else:
+                    log(f"Transcription done ({len(text)} chars)")
                 return text
             except Exception as exc:
                 log_error(f"transcribe: {exc}\n{traceback.format_exc()}")
@@ -974,6 +984,45 @@ class VoiceWorker:
             self._stop()
         else:
             self._start()
+
+    def start_ptt(self) -> None:
+        """Démarre l'enregistrement push-to-talk (idempotent)."""
+        if not self.recorder:
+            emit({"type": "error", "message": "Worker non initialisé"})
+            return
+        if self._confirm_busy:
+            emit({
+                "type": "error",
+                "message": "Confirmation en cours — patientez.",
+            })
+            return
+        if self._transcribe_busy:
+            emit({"type": "error", "message": "Transcription encore en cours — patientez."})
+            return
+        if self.recording:
+            emit({"type": "recording", "active": True})
+            return
+        if self._starting:
+            emit({"type": "recording", "active": True})
+            return
+        self._start()
+
+    def stop_ptt(self) -> None:
+        """Arrête l'enregistrement push-to-talk (idempotent, sans transcription fantôme)."""
+        if not self.recorder:
+            emit({"type": "error", "message": "Worker non initialisé"})
+            return
+        if self._starting:
+            if self._start_timer:
+                self._start_timer.cancel()
+                self._start_timer = None
+            self._starting = False
+            emit({"type": "recording", "active": False})
+            return
+        if not self.recording:
+            emit({"type": "recording", "active": False})
+            return
+        self._stop()
 
     def _beep(self, freq: int, ms: int) -> None:
         def _run() -> None:
@@ -1199,13 +1248,21 @@ def main() -> None:
                     worker.init(req.get("config"))
                 elif cmd == "toggle":
                     worker.toggle()
+                elif cmd == "start":
+                    worker.start_ptt()
+                elif cmd == "stop":
+                    worker.stop_ptt()
                 elif cmd == "preload":
                     cfg = sanitize_config(req.get("config"))
                     worker.init(cfg)
-                    if worker.transcriber:
-                        worker.transcriber.loaded_event.wait(timeout=300)
-                        loaded = worker.transcriber.model is not None
-                        emit({"type": "model", "loading": False, "loaded": loaded})
+
+                    def _preload_finish() -> None:
+                        if worker.transcriber:
+                            worker.transcriber.loaded_event.wait(timeout=300)
+                            loaded = worker.transcriber.model is not None
+                            emit({"type": "model", "loading": False, "loaded": loaded})
+
+                    threading.Thread(target=_preload_finish, daemon=True).start()
                 elif cmd == "shutdown":
                     worker.shutdown()
                     break

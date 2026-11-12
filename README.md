@@ -23,7 +23,7 @@ import json, subprocess
 p = subprocess.Popen(["voice_worker.exe"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 send = lambda o: (p.stdin.write((json.dumps(o) + "\n").encode()), p.stdin.flush())
 send({"cmd": "init", "config": {"language": "fr", "model_size": "small"}})
-send({"cmd": "toggle"})   # démarre l'enregistrement
+send({"cmd": "toggle"})   # démarre l'enregistrement (ou start/stop, voir ci-dessous)
 # ... parler ...
 send({"cmd": "toggle"})   # arrête -> événements transcribing / transcript
 for line in p.stdout:
@@ -80,15 +80,23 @@ send({
 
 - Journal : `~/Documents/CyberScribeNote/voice_worker.log` (ou
   `~/Documents/CyberScribeNote/<app_id>/voice_worker.log` si `app_id` est fourni).
-  stdout reste réservé au protocole.
+  stdout reste réservé au protocole. Par défaut le fichier journal **ne contient pas**
+  le texte dicté (vie privée). Débogage : `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` ou
+  `log_transcripts: true` dans `config` à l'init.
+
+- Push-to-talk explicite : `{"cmd": "start"}` / `{"cmd": "stop"}` (idempotents ;
+  `toggle` reste supporté pour les clients existants).
 
 ## Protocole (résumé)
 
 | Commandes (stdin) | Événements (stdout) |
 |---|---|
-| `init`, `preload`, `toggle`, `confirm`, `ping`, `shutdown` | `deps`, `ready`, `status`, `model`, `recording`, `transcribing`, `transcript`, `confirmation`, `error`, `pong` |
+| `init`, `preload`, `start`, `stop`, `toggle`, `confirm`, `ping`, `shutdown` | `deps`, `ready`, `status`, `model`, `recording`, `transcribing`, `transcript`, `confirmation`, `error`, `pong` |
 
-Spécification complète : [docs/PROTOCOL.md](docs/PROTOCOL.md).
+Spécification complète : [docs/PROTOCOL.md](docs/PROTOCOL.md). **scribe-voice définit
+le contrat** ; les apps clientes s'y adaptent.
+
+Historique v1.1 : [CHANGELOG.md](CHANGELOG.md).
 
 ## Build
 

@@ -19,18 +19,24 @@ Dès le lancement, avant toute commande :
 
 ```json
 {"type": "deps", "ok": true}
-{"type": "ready", "version": "1.1.0-dev", "protocol": 3}
+{"type": "ready", "version": "1.1.0", "protocol": 4}
 ```
 
 - `version` : version sémantique du worker (chaîne).
 - `protocol` : entier de version du contrat JSON (v1.0 implicite = pas de champs ;
-  v1.1 modèles / hors ligne = `2` ; v1.1 mot-clé / commandes / confirmation = `3`).
-  Les clients v1.0 peuvent ignorer les champs supplémentaires (`command` sur `transcript`,
-  événement `confirmation`, etc.).
+  v1.1 modèles / hors ligne = `2` ; v1.1 mot-clé / commandes / confirmation = `3` ;
+  v1.1 PTT explicite / preload concurrent = `4`).
+  Les clients plus anciens peuvent ignorer les champs ou commandes qu'ils ne gèrent pas.
 
-**Pourquoi `protocol` 3 ?** Les clients qui ne comprennent pas `confirm` ni `command`
-peuvent continuer à lire uniquement `transcript.text` ; le bump signale toutefois
-des capacités nouvelles (commande stdin `confirm`, champ optionnel `command`).
+**Référence client** : ce document décrit le comportement de **scribe-voice**. Les
+applications (CyberScribeNote, Fresh Windows, etc.) doivent s'y conformer ; ce n'est pas
+le worker qui s'adapte à chaque client.
+
+**Pourquoi `protocol` 4 ?** Ajout des commandes **start** / **stop** (push-to-talk
+explicite) et **preload** qui ne bloque plus la boucle de commandes — un **ping** reçu
+pendant un chargement répond sans attendre la fin. Les clients qui n'utilisent que
+**toggle** restent compatibles ; le numéro signale les capacités PTT et le preload
+non bloquant pour stdin.
 
 Si `pyaudio` ou `faster_whisper` est introuvable :
 `{"type": "deps", "ok": false, "error": "<message ImportError>"}` puis `ready`
@@ -41,8 +47,10 @@ Si `pyaudio` ou `faster_whisper` est introuvable :
 | Commande | Forme | Effet |
 |---|---|---|
 | `init` | `{"cmd": "init", "config": {…}}` | Ouvre PyAudio (une fois), crée ou recharge le modèle Whisper en arrière-plan. Non bloquant. |
-| `preload` | `{"cmd": "preload", "config": {…}}` | Comme `init`, puis **bloque** (≤ 300 s) jusqu'à la fin du chargement et émet `model`. |
-| `toggle` | `{"cmd": "toggle"}` | Démarre l'enregistrement, ou l'arrête et lance la transcription. |
+| `preload` | `{"cmd": "preload", "config": {…}}` | Comme `init`, puis termine le chargement **en arrière-plan** (≤ 300 s) et émet un `model` final ; les autres commandes (ex. `ping`) sont traitées pendant ce chargement. |
+| `start` | `{"cmd": "start"}` | Démarre l'enregistrement (push-to-talk). **Idempotent** : si l'enregistrement est déjà actif (ou en cours de démarrage), renvoie `recording` `active:true` sans doubler l'enregistrement. |
+| `stop` | `{"cmd": "stop"}` | Arrête l'enregistrement et lance la transcription si nécessaire. **Idempotent** : si rien n'enregistre, renvoie `recording` `active:false` **sans** `transcript` vide. |
+| `toggle` | `{"cmd": "toggle"}` | Démarre l'enregistrement, ou l'arrête et lance la transcription (comportement historique inchangé). |
 | `confirm` | `{"cmd": "confirm", "timeout": 4}` | Écoute micro pendant `timeout` secondes (défaut **4**, borné à [0,5 ; 30]), transcrit, émet `confirmation`. Non bloquant sur stdin (traitement en arrière-plan). |
 | `ping` | `{"cmd": "ping"}` | Répond `{"type": "pong"}`. |
 | `shutdown` | `{"cmd": "shutdown"}` | Libère PyAudio et termine le processus (code 0). La fermeture de stdin (EOF) termine aussi le worker. |
@@ -67,6 +75,7 @@ Clés inconnues ignorées ; valeur invalide → valeur par défaut.
 | `app_id` | identifiant court (journal séparé par application) | `null` |
 | `keyword` | mot-clé de commande vocale (début de phrase) | `Scribe` |
 | `keyword_aliases` | liste de variantes ASR (ex. fautes de transcription) | `[]` |
+| `log_transcripts` | booléen : inclure le texte transcrit dans `voice_worker.log` | `false` (voir aussi env.) |
 
 Le `initial_prompt` Whisper et le filtre « mot-clé seul » (anti-hallucination) sont
 dérivés de `keyword` (prompt = `« {keyword}. »`). Les alias servent au **parsing**
@@ -95,6 +104,10 @@ de `transcript.command`, pas au prompt.
 - Par défaut : `~/Documents/CyberScribeNote/voice_worker.log`.
 - Avec `app_id` : `~/Documents/CyberScribeNote/<app_id>/voice_worker.log`.
 - Le fichier est créé au démarrage du worker (`main`), pas à l'import du module.
+- **Vie privée** : par défaut, le journal **n'inclut pas** le texte transcrit (seulement
+  des métadonnées, ex. durée / nombre de caractères). Pour le débogage :
+  - variable d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`) ;
+  - ou `log_transcripts: true` dans `config` à l'`init`.
 
 ## Événements (stdout)
 
@@ -104,7 +117,7 @@ de `transcript.command`, pas au prompt.
 | `ready` | `version` (str), `protocol` (int) | Démarrage, après `deps`. |
 | `status` | `recording` (false), `depsOk` (true) | Fin de `init` / `preload` réussi. |
 | `model` | `loading` (bool), `loaded` (bool) | Début (`loading: true, loaded: false`) et fin de chargement ; `preload` en émet un de plus. Un échec peut émettre plusieurs fois `loaded: false`. |
-| `recording` | `active` (bool) | `true` ~0,22 s après `toggle` (après le bip), `false` à l'arrêt. |
+| `recording` | `active` (bool) | `true` ~0,22 s après `toggle` ou `start` (après le bip), `false` à l'arrêt (`toggle` ou `stop`). |
 | `transcribing` | `active` (bool) | `true` puis `false` autour de la transcription. |
 | `transcript` | `text` (str), `command` (objet, **optionnel**) | Toujours après `transcribing: false` ; `""` si audio vide, trop court/silencieux ou erreur. `command` présent **seulement** si la phrase commence par `keyword` ou un alias (position 0, casse / accents / ponctuation de tête ignorés) : `{"keyword":"<mot-clé canonique>","text":"<consigne sans le mot-clé>"}`. Le champ `text` du transcript reste la transcription brute (rétrocompat v1.0). |
 | `confirmation` | `answer` (`yes` \| `no` \| `unknown`), `text` (str) | Après `confirm` : transcription de la fenêtre micro, puis classification oui/non (français). Le worker **n'exécute aucune action** ; l'application décide. |
@@ -120,6 +133,8 @@ Messages d'erreur courants : `Worker non initialisé` (toggle avant init),
 
 ## Séquence type d'une dictée
 
+Avec **toggle** (historique) :
+
 ```
 → {"cmd":"init","config":{"language":"fr","model_size":"small"}}
 ← {"type":"model","loading":true,"loaded":false}
@@ -133,6 +148,22 @@ Messages d'erreur courants : `Worker non initialisé` (toggle avant init),
 ← {"type":"transcribing","active":false}
 ← {"type":"transcript","text":"Scribe, corrige le texte.","command":{"keyword":"Scribe","text":"corrige le texte."}}
 ```
+
+Avec **start** / **stop** (push-to-talk) :
+
+```
+→ {"cmd":"start"}
+← {"type":"recording","active":true}
+→ {"cmd":"start"}
+← {"type":"recording","active":true}
+→ {"cmd":"stop"}
+← {"type":"recording","active":false}
+← … transcribing / transcript …
+→ {"cmd":"stop"}
+← {"type":"recording","active":false}
+```
+
+Un second `stop` sans enregistrement en cours ne produit pas de `transcript`.
 
 ### Confirmation (`confirm`)
 
