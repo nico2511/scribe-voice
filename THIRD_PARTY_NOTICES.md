@@ -13,8 +13,6 @@ Les textes de licence complets sont disponibles dans les dépôts / distribution
 | CTranslate2 | 4.8.2 | MIT | https://github.com/OpenNMT/CTranslate2 |
 | Intel OpenMP runtime (`libiomp5md.dll`, fourni avec CTranslate2) | — | Intel Simplified Software License | https://www.intel.com/ |
 | ONNX Runtime | 1.30.0 | MIT | https://github.com/microsoft/onnxruntime |
-| PyAV (`av`) | 18.1.0 | BSD-3-Clause | https://github.com/PyAV-Org/PyAV |
-| FFmpeg et codecs embarqués par la roue PyAV (`av.libs/` : avcodec, avformat, avutil, swresample, swscale, dav1d, libvpx, opus, lame, x264, x265, SVT-AV1, webp, opencore-amr…) | build PyAV 18.1.0 | LGPL-2.1+ pour FFmpeg ; **GPL-2.0+ pour libx264 / libx265** ; BSD/ISC/Apache/LGPL pour les autres — à vérifier, voir ci-dessous | https://ffmpeg.org/ |
 | tokenizers | 0.23.2 | Apache-2.0 | https://github.com/huggingface/tokenizers |
 | huggingface_hub | 1.33.0 | Apache-2.0 | https://github.com/huggingface/huggingface_hub |
 | hf-xet | 1.6.0 | Apache-2.0 | https://github.com/huggingface/xet-core |
@@ -44,10 +42,9 @@ Les textes de licence complets sont disponibles dans les dépôts / distribution
 - **Modèles Whisper** (CTranslate2, ex. `Systran/faster-whisper-base`) : téléchargés à l'exécution depuis
   Hugging Face dans `~/Documents/CyberScribeNote/models`. Poids Whisper d'OpenAI sous licence MIT.
 
-## Point à vérifier (FFmpeg / GPL)
+## PyAV / FFmpeg (non embarqués depuis v1.1)
 
-L'exe de référence contient, via la roue binaire PyAV, `libx264` et `libx265` (licence GPL).
-Le worker n'utilise que le décodage audio, mais la redistribution d'un binaire incluant ces
-bibliothèques peut entraîner des obligations GPL (mise à disposition des sources correspondantes).
-Ce point est hors périmètre de la v1.0 (aucun changement de dépendances) et devra être tranché
-(par ex. roue PyAV LGPL-only ou exclusion de ces DLL dans la spec) dans une version ultérieure.
+Le worker enregistre du PCM 16 kHz via PyAudio et passe un tableau NumPy à faster-whisper ;
+il n'appelle pas ``decode_audio`` (PyAV). PyAV peut rester installé dans l'environnement de
+build via la dépendance pip de faster-whisper, mais il est **exclu** de l'exe PyInstaller
+(ainsi que FFmpeg, libx264, libx265, etc.).

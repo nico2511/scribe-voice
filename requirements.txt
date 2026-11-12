@@ -14,6 +14,9 @@ faster-whisper==1.2.1
 pyaudio==0.2.14
 
 # --- Transitives (faster-whisper) -----------------------------------------
+# faster-whisper 1.2.1 déclare PyAV pour decode_audio ; scribe-voice v1.1+ ne l'utilise
+# pas (PCM 16 kHz -> ndarray). On fige av pour reproduire l'environnement pip / dev ;
+# l'exe PyInstaller exclut av (voir voice_worker.spec).
 ctranslate2==4.8.2
 onnxruntime==1.30.0
 av==18.1.0

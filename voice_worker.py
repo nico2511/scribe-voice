@@ -23,9 +23,59 @@ import sys
 import tempfile
 import threading
 import traceback
+import types
 import unicodedata
 import wave
 from typing import Any
+
+# faster-whisper 1.2.1 importe PyAV au chargement de ``faster_whisper.audio`` (GPL via
+# x264/x265 dans les roues Windows). On ne passe jamais par ``decode_audio`` : le micro
+# fournit déjà du PCM 16 kHz mono, converti en ``np.ndarray`` float32 pour
+# ``WhisperModel.transcribe``. Un module ``av`` factice suffit pour l'import du paquet.
+_PYAV_STUB_ATTR = "__scribe_pyav_stub__"
+
+
+def _install_pyav_import_stub() -> None:
+    existing = sys.modules.get("av")
+    if existing is not None and getattr(existing, _PYAV_STUB_ATTR, False):
+        return
+    if existing is not None and getattr(existing, "__file__", None):
+        # PyAV réel déjà chargé (dev / tests) — ne pas écraser.
+        return
+
+    av = types.ModuleType("av")
+    setattr(av, _PYAV_STUB_ATTR, True)
+
+    error = types.ModuleType("av.error")
+
+    class InvalidDataError(Exception):
+        pass
+
+    error.InvalidDataError = InvalidDataError
+    av.error = error
+
+    audio = types.ModuleType("av.audio")
+    resampler = types.ModuleType("av.audio.resampler")
+    resampler.AudioResampler = type("AudioResampler", (), {"__init__": lambda self, **_: None})
+    audio.resampler = resampler
+    fifo = types.ModuleType("av.audio.fifo")
+    fifo.AudioFifo = type("AudioFifo", (), {})
+    audio.fifo = fifo
+    av.audio = audio
+
+    def _pyav_disabled(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("PyAV désactivé dans scribe-voice (pas de decode_audio)")
+
+    av.open = _pyav_disabled
+
+    sys.modules["av"] = av
+    sys.modules["av.error"] = error
+    sys.modules["av.audio"] = audio
+    sys.modules["av.audio.resampler"] = resampler
+    sys.modules["av.audio.fifo"] = fifo
+
+
+_install_pyav_import_stub()
 
 WORKER_VERSION = "1.1.0-dev"
 PROTOCOL_VERSION = 2
@@ -429,6 +479,29 @@ def _wav_stats(path: str) -> tuple[float, float]:
     return duration, rms
 
 
+def _load_wav_mono_float32(path: str, expected_rate: int = 16000) -> Any:
+    """Charge un WAV PCM mono int16 en ``np.ndarray`` float32 (sans PyAV)."""
+    import numpy as np
+
+    with wave.open(path, "rb") as wf:
+        rate = wf.getframerate() or expected_rate
+        channels = wf.getnchannels()
+        width = wf.getsampwidth()
+        if channels != 1 or width != 2:
+            raise ValueError(
+                f"WAV attendu : mono int16 {expected_rate} Hz ; "
+                f"reçu {channels} canal(x), {width} octets/échantillon, {rate} Hz"
+            )
+        if rate != expected_rate:
+            raise ValueError(
+                f"WAV à {rate} Hz : seul {expected_rate} Hz est pris en charge sans PyAV"
+            )
+        frames = wf.readframes(wf.getnframes())
+    if not frames:
+        return np.zeros(0, dtype=np.float32)
+    return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def detect_nvidia_gpu() -> bool:
     try:
         result = subprocess.run(
@@ -705,6 +778,13 @@ class Transcriber:
             log("no speech detected (VAD gate) — skip")
             return ""
 
+        try:
+            audio = _load_wav_mono_float32(audio_path)
+        except Exception as exc:
+            log_error(f"wav load: {exc}")
+            emit({"type": "error", "message": f"Lecture WAV : {exc}"})
+            return None
+
         with self._transcribe_lock:
             try:
                 lang = self.config.get("language")
@@ -715,7 +795,7 @@ class Transcriber:
                 # Les commandes « Scribe, … » durent 1–3 s : le VAD les avale souvent.
                 use_vad = bool(preset["vad_filter"]) and duration >= 3.5
                 text = self._transcribe_once(
-                    audio_path,
+                    audio,
                     lang,
                     preset,
                     duration=duration,
@@ -725,7 +805,7 @@ class Transcriber:
                 if not text and duration < 8:
                     log("empty transcript — retry without VAD")
                     text = self._transcribe_once(
-                        audio_path,
+                        audio,
                         lang,
                         preset,
                         duration=duration,
@@ -767,7 +847,7 @@ class Transcriber:
 
     def _transcribe_once(
         self,
-        audio_path: str,
+        audio: Any,
         lang: str | None,
         preset: dict[str, Any],
         *,
@@ -798,10 +878,10 @@ class Transcriber:
         if not self.model:
             return ""
         try:
-            segments, _info = self.model.transcribe(audio_path, **kwargs)
+            segments, _info = self.model.transcribe(audio, **kwargs)
         except TypeError:
             kwargs.pop("without_timestamps", None)
-            segments, _info = self.model.transcribe(audio_path, **kwargs)
+            segments, _info = self.model.transcribe(audio, **kwargs)
         segment_list = list(segments)
         if duration < 3.5:
             segment_list = [
