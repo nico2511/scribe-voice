@@ -7,6 +7,7 @@ FAKE_WHISPER (JSON) :
 """
 import json
 import os
+import time
 
 
 def _cfg():
@@ -34,6 +35,9 @@ class WhisperModel:
         cfg = _cfg()
         if cfg.get("fail_load"):
             raise RuntimeError("modèle introuvable (simulé)")
+        delay = float(cfg.get("load_delay_sec") or 0)
+        if delay > 0:
+            time.sleep(delay)
         loads_file = cfg.get("loads_file")
         if loads_file:
             with open(loads_file, "a", encoding="utf-8") as fp:
