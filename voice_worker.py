@@ -530,6 +530,9 @@ def detect_nvidia_gpu() -> bool:
 def check_deps() -> tuple[bool, str | None]:
     try:
         import pyaudio  # noqa: F401
+        # NumPy/OpenBLAS doit être importé sur le thread principal avant tout thread
+        # de transcription (sinon blocage indéfini sous Windows en CI / exe).
+        import numpy as np  # noqa: F401
         from faster_whisper import WhisperModel  # noqa: F401
         return True, None
     except ImportError as exc:
