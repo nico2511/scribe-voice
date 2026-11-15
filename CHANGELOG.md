@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.1
+
+- Correctif Windows : NumPy est désormais importé au démarrage, sur le thread principal (`check_deps()`). Son premier import dans un thread de transcription bloquait indéfiniment sous Windows (initialisation OpenBLAS) : la transcription ne se terminait jamais.
+- `requirements-dev.txt` : ajout de `numpy==2.4.6`, requis par les tests.
+- Version **1.1.1**, protocole **4** inchangé.
+
 ## v1.1.0
 
 Référence : [docs/PROTOCOL.md](docs/PROTOCOL.md) (protocole **4**). Les applications clientes

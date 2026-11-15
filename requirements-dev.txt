@@ -1,2 +1,4 @@
 # Tests de contrat (aucun micro ni modèle requis : pyaudio / faster_whisper sont simulés).
 pytest==9.1.1
+# numpy est importé par tests/test_pyav_free.py et tests/test_transcriber.py (même version que requirements.txt).
+numpy==2.4.6
