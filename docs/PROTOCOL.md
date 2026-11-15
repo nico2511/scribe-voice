@@ -1,17 +1,17 @@
-# Protocole JSON Lines — scribe-voice v1.1
+# Protocole JSON Lines de scribe-voice (protocole 4)
 
-Le worker est un processus permanent. Le parent (CyberScribeNote, Fresh Windows…)
-lui écrit des **commandes** sur **stdin** et lit des **événements** sur **stdout**.
+Le worker est un processus permanent. L'application cliente (le « parent ») lui écrit des
+**commandes** sur **stdin** et lit des **événements** sur **stdout**.
 
-- Une ligne = un objet JSON, terminé par `\n`. Les lignes vides sont ignorées.
-- stdout est écrit en **UTF-8** brut sur le descripteur 1 (`ensure_ascii=False`),
-  y compris sous Windows (mode binaire). Lire stdout en octets puis décoder en UTF-8.
-- stdin est lu en mode texte Python (encodage par défaut de la plateforme) :
-  envoyer de préférence du JSON ASCII (`\uXXXX` pour les caractères non ASCII).
-- stdout ne contient **que** des événements ; les journaux vont dans un fichier
-  `voice_worker.log` (voir ci-dessous). Aucun dossier n'est créé à l'import du module.
-- Les événements peuvent être émis depuis des threads : leur ordre relatif
-  n'est garanti que là où c'est indiqué ci-dessous.
+- Chaque ligne contient un objet JSON et se termine par `\n`. Les lignes vides sont ignorées.
+- stdout est écrit en **UTF-8** brut sur le descripteur 1 (`ensure_ascii=False`), y compris
+  sous Windows, où stdout passe en mode binaire. Il faut lire stdout en octets, puis le décoder en UTF-8.
+- stdin est lu en mode texte Python, avec l'encodage par défaut de la plateforme. Il vaut mieux
+  envoyer du JSON ASCII, avec `\uXXXX` pour les caractères non ASCII.
+- stdout ne contient **que** des événements. Les journaux vont dans le fichier `voice_worker.log`
+  (voir plus bas). L'import du module ne crée aucun dossier.
+- Des événements peuvent être émis depuis plusieurs threads. Leur ordre relatif n'est garanti
+  que là où ce document l'indique.
 
 ## Démarrage
 
@@ -23,147 +23,187 @@ Dès le lancement, avant toute commande :
 ```
 
 - `version` : version sémantique du worker (chaîne).
-- `protocol` : entier de version du contrat JSON (v1.0 implicite = pas de champs ;
-  v1.1 modèles / hors ligne = `2` ; v1.1 mot-clé / commandes / confirmation = `3` ;
-  v1.1 PTT explicite / preload concurrent = `4`).
-  Les clients plus anciens peuvent ignorer les champs ou commandes qu'ils ne gèrent pas.
+- `protocol` : version entière du contrat JSON. Les clients plus anciens peuvent ignorer les
+  champs et commandes qu'ils ne gèrent pas. L'historique des numéros est le suivant :
+  - pas de champ `protocol` : v1.0 ;
+  - `2` : résolution des modèles et mode hors ligne ;
+  - `3` : mot-clé, champ `command` et commande `confirm` ;
+  - `4` : commandes `start` et `stop`, et `preload` traité en arrière-plan.
 
-**Référence client** : ce document décrit le comportement de **scribe-voice**. Les
-applications (CyberScribeNote, Fresh Windows, etc.) doivent s'y conformer ; ce n'est pas
-le worker qui s'adapte à chaque client.
-
-**Pourquoi `protocol` 4 ?** Ajout des commandes **start** / **stop** (push-to-talk
-explicite) et **preload** qui ne bloque plus la boucle de commandes — un **ping** reçu
-pendant un chargement répond sans attendre la fin. Les clients qui n'utilisent que
-**toggle** restent compatibles ; le numéro signale les capacités PTT et le preload
-non bloquant pour stdin.
-
-Si `pyaudio` ou `faster_whisper` est introuvable :
-`{"type": "deps", "ok": false, "error": "<message ImportError>"}` puis `ready`
-(le worker reste à l'écoute, mais `init` échouera).
+Si `pyaudio`, `numpy` ou `faster_whisper` ne peut pas être importé, le worker émet
+`{"type": "deps", "ok": false, "error": "<message ImportError>"}`, puis `ready`. Il reste à
+l'écoute, mais `init` échouera.
 
 ## Commandes (stdin)
 
 | Commande | Forme | Effet |
 |---|---|---|
-| `init` | `{"cmd": "init", "config": {…}}` | Ouvre PyAudio (une fois), crée ou recharge le modèle Whisper en arrière-plan. Non bloquant. |
-| `preload` | `{"cmd": "preload", "config": {…}}` | Comme `init`, puis termine le chargement **en arrière-plan** (≤ 300 s) et émet un `model` final ; les autres commandes (ex. `ping`) sont traitées pendant ce chargement. |
-| `start` | `{"cmd": "start"}` | Démarre l'enregistrement (push-to-talk). **Idempotent** : si l'enregistrement est déjà actif (ou en cours de démarrage), renvoie `recording` `active:true` sans doubler l'enregistrement. |
-| `stop` | `{"cmd": "stop"}` | Arrête l'enregistrement et lance la transcription si nécessaire. **Idempotent** : si rien n'enregistre, renvoie `recording` `active:false` **sans** `transcript` vide. |
-| `toggle` | `{"cmd": "toggle"}` | Démarre l'enregistrement, ou l'arrête et lance la transcription (comportement historique inchangé). |
-| `confirm` | `{"cmd": "confirm", "timeout": 4}` | Écoute micro pendant `timeout` secondes (défaut **4**, borné à [0,5 ; 30]), transcrit, émet `confirmation`. Non bloquant sur stdin (traitement en arrière-plan). |
+| `init` | `{"cmd": "init", "config": {…}}` | Applique la configuration, ouvre PyAudio (une seule fois), puis crée le modèle Whisper ou le recharge si `model_size`, `device`, `compute_type`, `models_dir` ou `offline` ont changé. Le chargement se fait dans un thread : la commande rend la main tout de suite et émet `status`. |
+| `preload` | `{"cmd": "preload", "config": {…}}` | Fait comme `init`, puis attend la fin du chargement en arrière-plan, au plus 300 s, et émet un événement `model` final avec `loaded` à true ou false. Pendant ce temps, les autres commandes, par exemple `ping`, sont traitées. |
+| `start` | `{"cmd": "start"}` | Démarre l'enregistrement. Commande **idempotente** : si un enregistrement est déjà actif ou en train de démarrer, le worker renvoie `recording` `active:true` sans en lancer un second. |
+| `stop` | `{"cmd": "stop"}` | Arrête l'enregistrement et lance la transcription. Commande **idempotente** : si rien n'enregistre, le worker renvoie `recording` `active:false` sans `transcript`. Pendant le délai de démarrage (~220 ms), elle annule le démarrage : `recording` `active:false`, sans `transcript`. |
+| `toggle` | `{"cmd": "toggle"}` | Démarre l'enregistrement, ou l'arrête et lance la transcription. Pendant le délai de démarrage, elle annule : `recording` `active:false`, puis `transcript` vide. |
+| `confirm` | `{"cmd": "confirm", "timeout": 4}` | Écoute le micro pendant `timeout` secondes (4 par défaut, valeur bornée à [0,5 ; 30]), transcrit, puis émet `confirmation`. Le traitement se fait en arrière-plan. |
 | `ping` | `{"cmd": "ping"}` | Répond `{"type": "pong"}`. |
-| `shutdown` | `{"cmd": "shutdown"}` | Libère PyAudio et termine le processus (code 0). La fermeture de stdin (EOF) termine aussi le worker. |
+| `shutdown` | `{"cmd": "shutdown"}` | Libère PyAudio et termine le processus. La fermeture de stdin (EOF) termine aussi le worker. |
 
-Toute autre valeur de `cmd` : `{"type": "error", "message": "Commande inconnue : <cmd>"}`.
-Ligne non JSON : `{"type": "error", "message": "JSON invalide : …"}`. Dans les deux cas le worker continue.
+Une valeur de `cmd` inconnue produit `{"type": "error", "message": "Commande inconnue : <cmd>"}`.
+Une ligne qui n'est pas du JSON valide produit `{"type": "error", "message": "JSON invalide : …"}`.
+Dans les deux cas, le worker continue. Une ligne JSON valide qui n'est pas un objet (tableau,
+nombre…) provoque en revanche `Worker fatal : …`, puis la fin du processus.
+
+Une exception dans le traitement d'une commande produit `{"type": "error", "message": "Worker : …"}`.
 
 ### Configuration (`config`)
 
-Clés inconnues ignorées ; valeur invalide → valeur par défaut.
+Les clés inconnues sont ignorées et une valeur invalide est remplacée par la valeur par défaut.
+La configuration complète est appliquée à chaque `init` ou `preload` : une clé absente reprend sa
+valeur par défaut, et non la valeur précédente.
 
 | Clé | Valeurs | Défaut |
 |---|---|---|
-| `language` | `auto`, `en`, `fr`, `de`, `es`, `it`, `ja`, `zh`, `nl`, `uk`, `pt`, `ru` | `fr` |
+| `language` | `auto` (détection), `en`, `fr`, `de`, `es`, `it`, `ja`, `zh`, `nl`, `uk`, `pt`, `ru` | `fr` |
 | `model_size` | `tiny`, `base`, `small`, `medium`, `large-v3` | `small` |
-| `device` | `auto`, `cpu`, `cuda` (CUDA seulement si `nvidia-smi -L` voit un GPU, repli CPU) | `auto` |
+| `device` | `auto`, `cpu`, `cuda` | `auto` |
 | `compute_type` | `int8`, `int8_float16`, `float16`, `float32` | `int8` |
 | `transcription_profile` | `fast`, `balanced`, `accurate` | `fast` |
-| `max_record_seconds` | entier, borné à [0, 600] ; 0 = pas d'arrêt automatique | `90` |
-| `models_dir` | chemin absolu ou relatif (voir résolution ci-dessous) | `null` (voir env.) |
-| `offline` | booléen : `true` → `local_files_only` (aucun téléchargement HF) | `false` |
-| `app_id` | identifiant court (journal séparé par application) | `null` |
-| `keyword` | mot-clé de commande vocale (début de phrase) | `Scribe` |
-| `keyword_aliases` | liste de variantes ASR (ex. fautes de transcription) | `[]` |
-| `log_transcripts` | booléen : inclure le texte transcrit dans `voice_worker.log` | `false` (voir aussi env.) |
+| `max_record_seconds` | entier borné à [0, 600] ; 0 désactive l'arrêt automatique | `90` |
+| `models_dir` | chemin (`~` développé, converti en chemin absolu) | `null` (voir plus bas) |
+| `offline` | booléen ; `true` interdit tout téléchargement (`local_files_only`) | `false` |
+| `app_id` | identifiant court ; les caractères hors `[\w.-]` sont remplacés par `_` (120 caractères au plus) | `null` |
+| `keyword` | mot-clé attendu en début de phrase (120 caractères au plus) | `Scribe` |
+| `keyword_aliases` | liste de variantes du mot-clé (32 au plus, 120 caractères chacune) | `[]` |
 
-Le `initial_prompt` Whisper et le filtre « mot-clé seul » (anti-hallucination) sont
-dérivés de `keyword` (prompt = `« {keyword}. »`). Les alias servent au **parsing**
-de `transcript.command`, pas au prompt.
+Les booléens acceptent aussi les chaînes `1`, `true`, `yes` et `on` (casse indifférente).
+
+**Choix du matériel** : `cuda` n'est utilisé que si `nvidia-smi -L` détecte un GPU. Sinon, le
+worker passe sur le CPU. Sur CUDA, `int8` devient `int8_float16`, et si le chargement CUDA échoue,
+le worker réessaie sur CPU en `int8`. Sur CPU, `int8_float16` et `float16` deviennent `int8`.
+
+**Profils** (`transcription_profile`) :
+
+| Profil | `beam_size` | `best_of` | `no_speech_threshold` | `log_prob_threshold` |
+|---|---|---|---|---|
+| `fast` | 1 | 1 | 0,6 | -1,0 |
+| `balanced` | 3 | 2 | 0,65 | -1,2 |
+| `accurate` | 5 | 3 | 0,7 | -1,0 |
 
 **Dossier des modèles**
 
-- Variable d'environnement : `SCRIBE_VOICE_MODELS_DIR` (chemin du dossier racine ou d'un modèle CT2).
-- Priorité : `config.models_dir` **>** `SCRIBE_VOICE_MODELS_DIR` **>** défaut
-  `~/Documents/CyberScribeNote/models` (téléchargements Hugging Face si `offline` = false).
+- Variable d'environnement : `SCRIBE_VOICE_MODELS_DIR`, qui désigne le dossier racine ou
+  directement un modèle CTranslate2.
+- Ordre de priorité : `config.models_dir`, puis `SCRIBE_VOICE_MODELS_DIR`, puis le dossier par
+  défaut `~/Documents/CyberScribeNote/models`. Le dossier par défaut sert de destination aux
+  téléchargements Hugging Face ; il n'est pas utilisé en mode hors ligne.
 
-**Résolution** (ordre, pour un `model_size` donné) :
+**Résolution** (dans cet ordre, pour un `model_size` donné) :
 
-1. Si `models_dir` pointe déjà sur un dossier CTranslate2 (`model.bin` ou `model.bin.index`),
-   ce chemin est chargé tel quel (indépendamment de `model_size`).
-2. Sinon, sous la racine `models_dir` :
-   - dossiers plats : `{model_size}/`, `faster-whisper-{model_size}/`, `whisper-{model_size}/` ;
-   - cache Hugging Face : `models--Systran--faster-whisper-{model_size}/snapshots/<hash>/`
-     (également sous `hub/` si présent).
-3. Si `offline` = true et aucun chemin local valide : événement `error` explicite, pas de téléchargement.
-4. Si `offline` = false et racine configurée sans correspondance locale : `model_size` est passé à
-   faster-whisper avec `download_root` = cette racine (comportement HF habituel).
+1. Si aucun dossier n'est configuré : avec `offline` à true, le worker émet l'erreur
+   `Mode hors ligne : indiquez models_dir ou SCRIBE_VOICE_MODELS_DIR.`. Sinon, faster-whisper
+   charge `model_size` avec le dossier par défaut comme `download_root`.
+2. Si le dossier configuré n'existe pas, le worker émet l'erreur `Dossier modèles introuvable : …`,
+   quelle que soit la valeur d'`offline`.
+3. Si le dossier est lui-même un modèle CTranslate2 (`model.bin` ou `model.bin.index`), il est
+   chargé tel quel, sans tenir compte de `model_size`.
+4. Sinon, le worker cherche sous ce dossier :
+   - les dossiers plats `{model_size}/`, `faster-whisper-{model_size}/` et `whisper-{model_size}/` ;
+   - le cache Hugging Face `models--Systran--faster-whisper-{model_size}/snapshots/<hash>/`,
+     aussi sous `hub/` s'il existe.
+5. Si rien ne correspond : avec `offline` à true, le worker émet l'erreur
+   `Modèle « … » introuvable dans …` sans rien télécharger. Avec `offline` à false,
+   faster-whisper charge `model_size` avec ce dossier comme `download_root`.
+
+Les erreurs de résolution sont émises sous la forme `Chargement modèle : <message>`, suivies de
+`model` avec `loaded:false`.
 
 **Journal**
 
-- Par défaut : `~/Documents/CyberScribeNote/voice_worker.log`.
-- Avec `app_id` : `~/Documents/CyberScribeNote/<app_id>/voice_worker.log`.
-- Le fichier est créé au démarrage du worker (`main`), pas à l'import du module.
-- **Vie privée** : par défaut, le journal **n'inclut pas** le texte transcrit (seulement
-  des métadonnées, ex. durée / nombre de caractères). Pour le débogage :
-  - variable d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`) ;
-  - ou `log_transcripts: true` dans `config` à l'`init`.
+- Le fichier `~/Documents/CyberScribeNote/voice_worker.log` est créé au démarrage du worker,
+  pas à l'import du module.
+- Après un `init` qui contient `app_id`, le journal est écrit dans
+  `~/Documents/CyberScribeNote/<app_id>/voice_worker.log`.
+- **Vie privée** : par défaut, le journal ne contient pas le texte transcrit, seulement des
+  métadonnées comme la durée, le RMS ou le nombre de caractères. Pour le débogage, la variable
+  d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`) ajoute les 180 premiers
+  caractères de chaque transcription de dictée.
+- La clé `log_transcripts` dans `config` n'est **pas** prise en compte dans la version 1.1.1 :
+  elle est retirée avec les autres clés inconnues. Seule la variable d'environnement a un effet.
+
+**Fichiers temporaires** : chaque enregistrement est écrit dans un WAV temporaire (16 kHz, mono,
+int16) dans le dossier temporaire du système. Ce fichier est supprimé après la transcription.
 
 ## Événements (stdout)
 
 | Type | Champs | Quand |
 |---|---|---|
-| `deps` | `ok` (bool), `error` (str, si `ok` = false) | Démarrage. |
-| `ready` | `version` (str), `protocol` (int) | Démarrage, après `deps`. |
-| `status` | `recording` (false), `depsOk` (true) | Fin de `init` / `preload` réussi. |
-| `model` | `loading` (bool), `loaded` (bool) | Début (`loading: true, loaded: false`) et fin de chargement ; `preload` en émet un de plus. Un échec peut émettre plusieurs fois `loaded: false`. |
-| `recording` | `active` (bool) | `true` ~0,22 s après `toggle` ou `start` (après le bip), `false` à l'arrêt (`toggle` ou `stop`). |
-| `transcribing` | `active` (bool) | `true` puis `false` autour de la transcription. |
-| `transcript` | `text` (str), `command` (objet, **optionnel**) | Toujours après `transcribing: false` ; `""` si audio vide, trop court/silencieux ou erreur. `command` présent **seulement** si la phrase commence par `keyword` ou un alias (position 0, casse / accents / ponctuation de tête ignorés) : `{"keyword":"<mot-clé canonique>","text":"<consigne sans le mot-clé>"}`. Le champ `text` du transcript reste la transcription brute (rétrocompat v1.0). |
-| `confirmation` | `answer` (`yes` \| `no` \| `unknown`), `text` (str) | Après `confirm` : transcription de la fenêtre micro, puis classification oui/non (français). Le worker **n'exécute aucune action** ; l'application décide. |
-| `error` | `message` (str, en français) | Erreur micro, modèle, transcription, commande… |
-| `pong` | — | Réponse à `ping`. |
+| `deps` | `ok` (bool), `error` (str, si `ok` vaut false) | Au démarrage. |
+| `ready` | `version` (str), `protocol` (int) | Au démarrage, après `deps`. |
+| `status` | `recording` (false), `depsOk` (true) | Quand `init` ou `preload` est accepté, sans attendre la fin du chargement. Il n'est pas émis si le micro ne peut pas être ouvert. |
+| `model` | `loading` (bool), `loaded` (bool) | Au début du chargement (`loading:true, loaded:false`), puis à la fin. Si la configuration du modèle n'a pas changé et que le modèle est déjà chargé, `init` émet directement `loading:false, loaded:true`. `preload` en émet un de plus à la fin de son attente. En cas d'échec, `loaded:false` peut être émis plusieurs fois. |
+| `recording` | `active` (bool) | `true` environ 0,22 s après `start` ou `toggle`. `false` à l'arrêt : `stop`, `toggle` ou arrêt automatique après `max_record_seconds`. |
+| `transcribing` | `active` (bool) | `true`, puis `false`, autour de la transcription. |
+| `transcript` | `text` (str), `command` (objet, optionnel) | Après `transcribing:false`, ou directement si aucun audio n'a été capté. `text` est vide si l'audio est vide, trop court ou silencieux, si la transcription ne contient que le mot-clé, ou en cas d'erreur. Voir [Mot-clé](#mot-clé-et-champ-command) pour `command`. |
+| `confirmation` | `answer` (`yes`, `no` ou `unknown`), `text` (str) | Après `confirm`. |
+| `error` | `message` (str, en français) | En cas d'erreur de micro, de modèle, de transcription ou de commande. |
+| `pong` | — | En réponse à `ping`. |
 
-Messages d'erreur courants : `Worker non initialisé` (toggle avant init),
-`Transcription encore en cours — patientez.`, `Confirmation en cours — patientez.`,
-`Confirmation impossible : enregistrement dictée en cours.`,
-`Confirmation impossible : transcription dictée en cours.`, `Microphone : …`, `Micro indisponible : …`,
-`Chargement modèle : …` (dossier absent, modèle introuvable en hors ligne, etc.),
-`Timeout chargement modèle Whisper`, `Transcription : …`.
+Un son est joué au début (600 Hz) et à la fin (400 Hz) de l'enregistrement, avec `winsound` et
+donc seulement sous Windows. Il n'est pas joué pendant `confirm`.
 
-## Séquence type d'une dictée
+Messages d'erreur émis par le worker :
 
-Avec **toggle** (historique) :
+| Message | Cause |
+|---|---|
+| `Worker non initialisé` | `start`, `stop`, `toggle` ou `confirm` avant un `init` réussi |
+| `Transcription encore en cours — patientez.` | `start` ou `toggle` pendant une transcription |
+| `Confirmation en cours — patientez.` | `start` ou `toggle` pendant un `confirm` |
+| `Confirmation déjà en cours — patientez.` | `confirm` pendant un `confirm` |
+| `Confirmation impossible : enregistrement dictée en cours.` | `confirm` pendant un enregistrement ou son démarrage |
+| `Confirmation impossible : transcription dictée en cours.` | `confirm` pendant une transcription |
+| `Micro indisponible : …` | échec de l'ouverture de PyAudio à l'`init` |
+| `Microphone : …` | échec de l'ouverture du flux micro |
+| `Enregistrement WAV : …` / `Lecture WAV : …` | échec d'écriture ou de lecture du WAV temporaire |
+| `Chargement modèle : …` | erreur de résolution ou de chargement du modèle |
+| `Timeout chargement modèle Whisper` | modèle toujours pas chargé 120 s après la demande de transcription |
+| `Transcription : …` / `Confirmation : …` | exception pendant la transcription |
+| `Commande inconnue : …` / `JSON invalide : …` / `Worker : …` / `Worker fatal : …` | voir [Commandes](#commandes-stdin) |
+
+## Séquences types
+
+Avec `start` / `stop` :
 
 ```
 → {"cmd":"init","config":{"language":"fr","model_size":"small"}}
 ← {"type":"model","loading":true,"loaded":false}
 ← {"type":"status","recording":false,"depsOk":true}
 ← {"type":"model","loading":false,"loaded":true}
+→ {"cmd":"start"}
+← {"type":"recording","active":true}
+→ {"cmd":"start"}
+← {"type":"recording","active":true}
+→ {"cmd":"stop"}
+← {"type":"recording","active":false}
+← {"type":"transcribing","active":true}
+← {"type":"transcribing","active":false}
+← {"type":"transcript","text":"Scribe, corrige le texte.","command":{"keyword":"Scribe","text":"corrige le texte."}}
+→ {"cmd":"stop"}
+← {"type":"recording","active":false}
+```
+
+Les deux premiers événements `model` et `status` sont émis par des threads différents, donc leur
+ordre relatif peut varier. Un second `stop` sans enregistrement en cours ne produit pas de `transcript`.
+
+Avec `toggle` :
+
+```
 → {"cmd":"toggle"}
 ← {"type":"recording","active":true}
 → {"cmd":"toggle"}
 ← {"type":"recording","active":false}
 ← {"type":"transcribing","active":true}
 ← {"type":"transcribing","active":false}
-← {"type":"transcript","text":"Scribe, corrige le texte.","command":{"keyword":"Scribe","text":"corrige le texte."}}
+← {"type":"transcript","text":"…"}
 ```
-
-Avec **start** / **stop** (push-to-talk) :
-
-```
-→ {"cmd":"start"}
-← {"type":"recording","active":true}
-→ {"cmd":"start"}
-← {"type":"recording","active":true}
-→ {"cmd":"stop"}
-← {"type":"recording","active":false}
-← … transcribing / transcript …
-→ {"cmd":"stop"}
-← {"type":"recording","active":false}
-```
-
-Un second `stop` sans enregistrement en cours ne produit pas de `transcript`.
 
 ### Confirmation (`confirm`)
 
@@ -172,40 +212,54 @@ Un second `stop` sans enregistrement en cours ne produit pas de `transcript`.
 ← {"type":"confirmation","answer":"yes","text":"oui"}
 ```
 
-Réponses reconnues (liste non exhaustive, normalisation casse / accents) :
+Le texte est d'abord normalisé : minuscules, accents supprimés, ponctuation remplacée par des
+espaces. Il est ensuite classé `no` s'il est égal à une expression « non » ou commence par
+l'une d'elles suivie d'un espace. Sinon, il est classé `yes` selon la même règle avec les
+expressions « oui ». Tout le reste, y compris un texte vide, donne `unknown`. Les expressions
+« non » sont testées en premier. Les listes, en français, sont dans `voice_keyword.py` :
 
-- **yes** : `oui`, `ouais`, `d'accord`, `ok`, `confirme`, `vas-y`, `allez-y`, `c'est bon`, …
-- **no** : `non`, `annule`, `stop`, `arrête`, `nan`, …
-- **unknown** : tout le reste (y compris silence ou phrase hors liste).
+- **yes** : `oui`, `ouais`, `oué`, `oué oué`, `d accord`, `daccord`, `ok`, `okay`, `confirme`,
+  `confirmé`, `confirmer`, `vas y`, `vas-y`, `allez y`, `allez-y`, `c est bon`, `c est ça`,
+  `affirmatif`, `exact`, `exactement` ;
+- **no** : `non`, `nan`, `nop`, `annule`, `annulé`, `annuler`, `stop`, `arrête`, `arrete`,
+  `arrêter`, `arreter`, `negatif`, `négatif`, `pas ça`, `pas ca`.
 
-Pendant un enregistrement ou une transcription dictée (`toggle`), `confirm` renvoie
-`error` et n'ouvre pas le micro. Pendant une confirmation, `toggle` renvoie
-`Confirmation en cours — patientez.`
+La transcription d'une confirmation utilise le profil `fast`, sans VAD, avec
+`no_speech_threshold=0.35`. Un audio de moins de 0,25 s, ou dont le RMS est inférieur à 60,
+donne un texte vide. Aucun filtre de mot-clé n'est appliqué. Si aucun audio n'a été capté, le
+worker émet `confirmation` avec `answer:"unknown"` et `text:""`.
 
-## Commandes vocales courtes « Scribe, … »
+## Mot-clé et champ `command`
 
-Pour que les ordres brefs adressés à l'assistant ne soient pas perdus, sans
-halluciner le mot-clé sur le silence :
+- Le champ `command` est ajouté à `transcript` **seulement** si la transcription commence par
+  `keyword` ou par un alias, suivi d'autre chose qu'une lettre ou un chiffre et d'un texte non vide.
+  La casse, les accents, ainsi que les espaces et la ponctuation en tête, sont ignorés.
+  Exemples : « Scribe, corrige » donne `command.text` = `corrige` ; « le scribe corrige » ne
+  donne pas de `command`.
+- `command.keyword` vaut toujours la forme canonique de `keyword`, même quand c'est un alias qui
+  a été reconnu. `command.text` contient la suite de la phrase, sans la ponctuation qui suit le mot-clé.
+- Le champ `text` de `transcript` reste la transcription brute.
+- Si la transcription ne contient que le mot-clé ou des alias, éventuellement répétés et séparés
+  par de la ponctuation, `transcript.text` est vide.
+- Chaque passe Whisper reçoit `initial_prompt="{keyword}."` (par exemple `Scribe.`). Les alias ne
+  servent qu'à la détection de `command` et au filtre « mot-clé seul », pas au prompt.
 
-- chaque passe Whisper reçoit `initial_prompt="« {keyword}. »"` (sans `hotwords`) ;
-- audio < 0,35 s ou RMS < 60 → `transcript` vide, sans appel au modèle ;
-- si l'audio dure **< 8 s**, une **porte VAD** (Silero via `faster_whisper.vad`,
-  détection seulement sur le PCM) doit détecter de la parole ; sinon `transcript`
-  vide sans passe Whisper ;
-- le **VAD Whisper** n'est activé que si l'audio dure **≥ 3,5 s**
-  (`condition_on_previous_text` suit la même règle) ;
-- sur les clips **< 3,5 s**, les segments dont `no_speech_prob > 0,6` sont ignorés ;
-- si le texte final ne contient que le mot-clé (ou un alias, casse / accents ignorés),
-  `transcript` vide ;
-- si la phrase **commence** par le mot-clé ou un alias, `transcript.command` est ajouté
-  (ex. « Scribe, corrige » → `command.text` = `corrige` ; « le scribe corrige » → pas de `command`) ;
-- si le résultat est vide et que l'audio dure **< 8 s**, nouvelle passe **sans VAD**,
-  `condition_on_previous_text=false`, `no_speech_threshold=0.35` ;
-- si la version de faster-whisper refuse `without_timestamps` (`TypeError`),
-  la passe est relancée sans ce paramètre ;
-- un second `toggle` reçu pendant le délai de démarrage (~220 ms) **annule**
-  l'enregistrement : `recording` `active:false` puis `transcript` vide, sans
-  `recording` `active:true` résiduel.
+## Traitement de l'audio d'une dictée
 
-Ce comportement est couvert par `tests/test_transcriber.py` et `tests/test_protocol.py`.
-La résolution des modèles et le mode hors ligne sont couverts par `tests/test_models.py`.
+- Si l'audio dure moins de 0,35 s ou si son RMS est inférieur à 60, `transcript` est vide et le
+  modèle n'est pas appelé.
+- Si l'audio dure moins de 8 s, une porte VAD (Silero via `faster_whisper.vad`) doit détecter de
+  la parole. Sinon, `transcript` est vide et aucune passe Whisper n'a lieu. Si cette détection
+  échoue, l'audio est traité comme de la parole.
+- Le VAD de Whisper (`vad_filter`, avec les paramètres du profil) et `condition_on_previous_text`
+  ne sont activés que si l'audio dure au moins 3,5 s.
+- Sur les clips de moins de 3,5 s, les segments dont `no_speech_prob` dépasse 0,6 sont ignorés.
+- Si le résultat est vide et que l'audio dure moins de 8 s, une seconde passe a lieu sans VAD,
+  avec `condition_on_previous_text=false` et `no_speech_threshold=0.35`.
+- Si la version de faster-whisper refuse `without_timestamps` (`TypeError`), la passe est relancée
+  sans ce paramètre.
+- L'audio est passé à faster-whisper sous forme de tableau NumPy float32. PyAV et `decode_audio`
+  ne sont pas utilisés.
+
+Tests associés : `tests/test_transcriber.py`, `tests/test_protocol.py`, `tests/test_keyword.py`,
+`tests/test_models.py`, `tests/test_config.py` et `tests/test_logging_privacy.py`.
