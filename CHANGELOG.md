@@ -2,38 +2,54 @@
 
 ## v1.1.1
 
-- Correctif Windows : NumPy est désormais importé au démarrage, sur le thread principal (`check_deps()`). Son premier import dans un thread de transcription bloquait indéfiniment sous Windows (initialisation OpenBLAS) : la transcription ne se terminait jamais.
-- `requirements-dev.txt` : ajout de `numpy==2.4.6`, requis par les tests.
-- Version **1.1.1**, protocole **4** inchangé.
+- Correctif Windows : NumPy est maintenant importé au démarrage, sur le thread principal
+  (`check_deps()`). Sous Windows, son premier import depuis un thread de transcription pouvait
+  bloquer indéfiniment pendant l'initialisation d'OpenBLAS, et la transcription ne se terminait jamais.
+- `deps` signale aussi l'absence de `numpy`.
+- `requirements-dev.txt` : ajout de `numpy==2.4.6`, nécessaire aux tests.
+- Version du worker **1.1.1**. Le protocole **4** ne change pas.
 
 ## v1.1.0
 
-Référence : [docs/PROTOCOL.md](docs/PROTOCOL.md) (protocole **4**). Les applications clientes
-(CyberScribeNote, Fresh Windows, etc.) s'adaptent à ce contrat ; scribe-voice en est la source de vérité.
+Le tag existe, mais aucun binaire n'a été publié pour cette version. La première release qui
+contient ces changements est la v1.1.1. Le protocole passe à **4** (voir [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 
-### T1 — Anti-hallucination « Scribe Scribe » et push-to-talk
+### Commandes et protocole
 
-Filtrage mot-clé seul, prompt Whisper, VAD adaptatif, fenêtre de démarrage toggle (~220 ms).
-Commandes dédiées **start** / **stop** (idempotentes) en complément de **toggle**.
+- Nouvelles commandes `start` et `stop`, toutes deux idempotentes. `toggle` est conservé.
+- `preload` attend la fin du chargement en arrière-plan : les autres commandes, comme `ping`,
+  sont traitées pendant ce temps.
+- Configuration `keyword` (par défaut `Scribe`) et `keyword_aliases`. Champ optionnel `command`
+  sur `transcript` quand la phrase commence par le mot-clé.
+- Nouvelle commande `confirm` : écoute courte, puis classification `yes`, `no` ou `unknown`
+  dans l'événement `confirmation`.
+- Champs `version` et `protocol` dans l'événement `ready`.
 
-### T2 — Modèle français et hors ligne
+### Modèles
 
-`model_size` par défaut **small**, langue **fr**, résolution `models_dir` / `SCRIBE_VOICE_MODELS_DIR`,
-mode `offline` sans téléchargement Hugging Face implicite.
+- Valeurs par défaut : `model_size` `small` et `language` `fr`.
+- Choix du dossier des modèles par `models_dir` ou `SCRIBE_VOICE_MODELS_DIR`. Prise en charge des
+  dossiers plats, du cache Hugging Face et des chemins directs vers un modèle CTranslate2.
+- Option `offline` : aucun téléchargement Hugging Face, et une erreur explicite si le modèle est
+  absent.
 
-### T3 — Exe sans PyAV ni codecs x264/x265
+### Transcription des commandes courtes
 
-Import factice de `av` ; lecture WAV PCM directe. Tests `tests/test_pyav_free.py`.
+- Prompt Whisper dérivé du mot-clé, et transcription vidée quand elle ne contient que le mot-clé.
+- Porte VAD Silero sous 8 s, VAD Whisper seulement à partir de 3,5 s, et seconde passe sans VAD
+  si le résultat est vide.
+- Un second `toggle` pendant le délai de démarrage (~220 ms) annule l'enregistrement.
 
-### T4 — Mot-clé configurable, commande et confirmation
+### Journal
 
-`keyword`, `keyword_aliases`, champ `command` sur `transcript`, commande **confirm**
-(classification oui/non). Protocole passé à **3** sur la branche mot-clé.
+- Le texte transcrit n'est plus écrit dans `voice_worker.log` par défaut. Pour l'inclure :
+  variable d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS`.
+- Journal séparé par application avec `app_id`.
 
-### T5 — Finition v1.1 (cette release)
+### Build
 
-- **start** / **stop** idempotents pour le push-to-talk.
-- **preload** n'empêche plus le traitement des autres commandes (ex. **ping** pendant le chargement).
-- Journaux sans texte transcrit par défaut (`SCRIBE_VOICE_LOG_TRANSCRIPTS` ou `log_transcripts` dans `init`).
-- Smoke test : `SCRIBE_SMOKE_MODEL` (défaut `small`).
-- Version **1.1.0**, protocole **4** (nouvelles commandes PTT + sémantique `preload` assouplie).
+- PyAV n'est plus utilisé : l'audio PCM est passé directement à faster-whisper sous forme de
+  tableau NumPy. `av` est exclu de l'exe, et `build.ps1` rejette tout build qui contient des
+  fichiers PyAV ou FFmpeg (`av.libs`, `x264`, `x265`, `avcodec`).
+- Smoke test : variable `SCRIBE_SMOKE_MODEL` (`small` par défaut) pour le test de transcription
+  optionnel.
