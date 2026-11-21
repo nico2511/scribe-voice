@@ -162,8 +162,6 @@ Sans `-Version`, la version vaut `dev`.
 - `requirements-dev.txt` : dépendances des tests (`pytest`, `numpy`).
 - `voice_worker.spec` : spec PyInstaller en un seul fichier, en mode console. Elle embarque les
   données de faster-whisper (dont `silero_vad_v6.onnx`, nécessaire au VAD) et exclut `av`.
-- `build_sidecar.ps1` : script historique conservé dans le dépôt ; ni `build.ps1` ni la CI ne
-  l'utilisent.
 
 ### CI
 
