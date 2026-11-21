@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `log_transcripts` dans `config` est pris en charge (booléen, défaut `false`). La variable
+  d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS` force l'activation lorsqu'elle vaut vrai ; sinon
+  c'est la config qui s'applique.
+- Une ligne JSON valide dont la racine n'est pas un objet produit
+  `JSON invalide : un objet JSON est attendu` au lieu de terminer le worker.
+
 ## v1.1.1
 
 - Correctif Windows : NumPy est maintenant importé au démarrage, sur le thread principal

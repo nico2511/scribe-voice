@@ -31,7 +31,31 @@ def test_valid_values_kept_and_normalized():
         "app_id": None,
         "keyword": "Scribe",
         "keyword_aliases": [],
+        "log_transcripts": False,
     }
+
+
+def test_log_transcripts_in_config():
+    assert vw.sanitize_config({"log_transcripts": True})["log_transcripts"] is True
+    assert vw.sanitize_config({"log_transcripts": "yes"})["log_transcripts"] is True
+    assert vw.sanitize_config({})["log_transcripts"] is False
+
+
+@pytest.mark.parametrize(
+    "env,config,expected",
+    [
+        (None, {"log_transcripts": True}, True),
+        (None, {"log_transcripts": False}, False),
+        ("0", {"log_transcripts": True}, True),
+        ("1", {"log_transcripts": False}, True),
+    ],
+)
+def test_log_transcripts_priority(monkeypatch, env, config, expected):
+    monkeypatch.delenv("SCRIBE_VOICE_LOG_TRANSCRIPTS", raising=False)
+    if env is not None:
+        monkeypatch.setenv("SCRIBE_VOICE_LOG_TRANSCRIPTS", env)
+    cfg = vw.sanitize_config(config)
+    assert vw._log_transcripts_enabled(cfg) is expected
 
 
 def test_invalid_values_fall_back():
