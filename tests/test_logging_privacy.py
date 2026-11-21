@@ -62,6 +62,27 @@ def test_transcript_text_not_in_log_by_default(monkeypatch, log_home, tmp_path):
     assert "Transcription done (" in content
 
 
+def test_transcript_text_in_log_when_config_enabled(monkeypatch, log_home, tmp_path):
+    """log_transcripts dans init suffit sans variable d'environnement."""
+    monkeypatch.setenv(
+        "FAKE_WHISPER",
+        '{"texts": ["visible via config."]}',
+    )
+    monkeypatch.setenv("FAKE_VAD", '{"has_speech": true}')
+    vw._ensure_logging(None)
+    cfg = vw.sanitize_config(
+        {"model_size": "small", "device": "cpu", "log_transcripts": True}
+    )
+    t = vw.Transcriber(cfg)
+    assert t.loaded_event.wait(timeout=15)
+    wav = tmp_path / "t.wav"
+    _loud_wav(wav)
+    result = t.transcribe(str(wav))
+    assert result == "visible via config."
+    content = _log_file(log_home).read_text(encoding="utf-8")
+    assert "visible via config" in content
+
+
 def test_transcript_text_in_log_when_enabled(monkeypatch, log_home, tmp_path):
     monkeypatch.setenv("SCRIBE_VOICE_LOG_TRANSCRIPTS", "1")
     monkeypatch.setenv(

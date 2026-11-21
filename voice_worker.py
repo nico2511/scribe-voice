@@ -149,6 +149,7 @@ DEFAULT_CONFIG = {
     "app_id": None,
     "keyword": "Scribe",
     "keyword_aliases": [],
+    "log_transcripts": False,
 }
 
 _HF_REPO_PREFIX = "models--Systran--faster-whisper-"
@@ -268,10 +269,17 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _log_transcripts_enabled(config: dict[str, Any] | None = None) -> bool:
-    """Vrai si le texte transcrit peut figurer dans voice_worker.log (débogage)."""
-    if isinstance(config, dict) and "log_transcripts" in config:
-        return _coerce_bool(config.get("log_transcripts"))
-    return _coerce_bool(os.environ.get("SCRIBE_VOICE_LOG_TRANSCRIPTS"))
+    """Vrai si le texte transcrit peut figurer dans voice_worker.log (débogage).
+
+    Priorité : ``SCRIBE_VOICE_LOG_TRANSCRIPTS`` forcé à vrai (1, true, yes, on) ;
+    sinon ``log_transcripts`` dans la config (après ``sanitize_config``) ; défaut faux.
+    """
+    env_raw = os.environ.get("SCRIBE_VOICE_LOG_TRANSCRIPTS")
+    if env_raw is not None and str(env_raw).strip() and _coerce_bool(env_raw):
+        return True
+    if isinstance(config, dict):
+        return _coerce_bool(config.get("log_transcripts", False))
+    return False
 
 
 def _sanitize_app_id(value: Any) -> str | None:
@@ -443,6 +451,7 @@ def sanitize_config(data: dict[str, Any] | None) -> dict[str, Any]:
         max_seconds = DEFAULT_CONFIG["max_record_seconds"]
     cfg["max_record_seconds"] = max(0, min(max_seconds, 600))
     cfg["offline"] = _coerce_bool(cfg.get("offline"))
+    cfg["log_transcripts"] = _coerce_bool(cfg.get("log_transcripts"))
     cfg["app_id"] = _sanitize_app_id(cfg.get("app_id"))
     kw = str(cfg.get("keyword") or DEFAULT_CONFIG["keyword"]).strip()
     cfg["keyword"] = kw[:120] if kw else DEFAULT_CONFIG["keyword"]
@@ -1242,6 +1251,13 @@ def main() -> None:
                 req = json.loads(line)
             except json.JSONDecodeError as exc:
                 emit({"type": "error", "message": f"JSON invalide : {exc}"})
+                continue
+
+            if not isinstance(req, dict):
+                emit({
+                    "type": "error",
+                    "message": "JSON invalide : un objet JSON est attendu",
+                })
                 continue
 
             cmd = req.get("cmd")

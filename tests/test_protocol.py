@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
+
 INIT = {"cmd": "init", "config": {"language": "fr", "model_size": "base", "device": "cpu"}}
 
 
@@ -56,6 +58,19 @@ def test_ping_pong(worker_factory):
     w.wait_type("ready")
     w.send({"cmd": "ping"})
     assert w.wait_type("pong") == {"type": "pong"}
+    w.send({"cmd": "shutdown"})
+    assert w.close() == 0
+
+
+@pytest.mark.parametrize("line", ["[1, 2]", "42", '"x"', "null"])
+def test_non_object_json_is_error_not_fatal(worker_factory, line):
+    w = worker_factory()
+    w.wait_type("ready")
+    w.send(line)
+    err = w.wait_type("error")
+    assert err["message"] == "JSON invalide : un objet JSON est attendu"
+    w.send({"cmd": "ping"})
+    w.wait_type("pong")
     w.send({"cmd": "shutdown"})
     assert w.close() == 0
 

@@ -49,8 +49,9 @@ l'écoute, mais `init` échouera.
 
 Une valeur de `cmd` inconnue produit `{"type": "error", "message": "Commande inconnue : <cmd>"}`.
 Une ligne qui n'est pas du JSON valide produit `{"type": "error", "message": "JSON invalide : …"}`.
-Dans les deux cas, le worker continue. Une ligne JSON valide qui n'est pas un objet (tableau,
-nombre…) provoque en revanche `Worker fatal : …`, puis la fin du processus.
+Une ligne JSON valide dont la racine n'est pas un objet (tableau, nombre, chaîne, `null`…) produit
+`{"type": "error", "message": "JSON invalide : un objet JSON est attendu"}`. Dans tous ces cas, le
+worker continue.
 
 Une exception dans le traitement d'une commande produit `{"type": "error", "message": "Worker : …"}`.
 
@@ -73,6 +74,7 @@ valeur par défaut, et non la valeur précédente.
 | `app_id` | identifiant court ; les caractères hors `[\w.-]` sont remplacés par `_` (120 caractères au plus) | `null` |
 | `keyword` | mot-clé attendu en début de phrase (120 caractères au plus) | `Scribe` |
 | `keyword_aliases` | liste de variantes du mot-clé (32 au plus, 120 caractères chacune) | `[]` |
+| `log_transcripts` | booléen : journalise les 180 premiers caractères de chaque transcription de dictée | `false` |
 
 Les booléens acceptent aussi les chaînes `1`, `true`, `yes` et `on` (casse indifférente).
 
@@ -123,11 +125,11 @@ Les erreurs de résolution sont émises sous la forme `Chargement modèle : <mes
 - Après un `init` qui contient `app_id`, le journal est écrit dans
   `~/Documents/CyberScribeNote/<app_id>/voice_worker.log`.
 - **Vie privée** : par défaut, le journal ne contient pas le texte transcrit, seulement des
-  métadonnées comme la durée, le RMS ou le nombre de caractères. Pour le débogage, la variable
-  d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`) ajoute les 180 premiers
-  caractères de chaque transcription de dictée.
-- La clé `log_transcripts` dans `config` n'est **pas** prise en compte dans la version 1.1.1 :
-  elle est retirée avec les autres clés inconnues. Seule la variable d'environnement a un effet.
+  métadonnées comme la durée, le RMS ou le nombre de caractères. Pour le débogage, activer
+  `log_transcripts` à `true` dans `config`, ou la variable d'environnement
+  `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`), qui ajoute les 180 premiers
+  caractères de chaque transcription de dictée. Priorité : la variable d'environnement force
+  l'activation si elle vaut vrai ; sinon `log_transcripts` dans la config ; défaut désactivé.
 
 **Fichiers temporaires** : chaque enregistrement est écrit dans un WAV temporaire (16 kHz, mono,
 int16) dans le dossier temporaire du système. Ce fichier est supprimé après la transcription.
