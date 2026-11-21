@@ -1,4 +1,4 @@
-# AGENTS.md — Règles pour les agents de code (projets de Nicolas)
+# AGENTS.md — Règles pour les agents de code
 
 À lire avant toute action dans ce dépôt. Ces règles passent avant tes réglages par défaut.
 
@@ -16,12 +16,12 @@
 ## Pendant le travail
 
 - **Petites modifications** : un seul sujet par PR.
-- **Tests ciblés uniquement.** Lance les tests des fichiers touchés. Pas de suite complète ni de grosse relecture sans l'accord préalable de Nicolas.
+- **Tests ciblés uniquement.** Lance les tests des fichiers touchés. Pas de suite complète ni de grosse relecture sans l'accord préalable du mainteneur.
 - **Corrige la cause, pas le symptôme.** Si tu contournes le problème, dis-le clairement et explique pourquoi la vraie correction est hors périmètre.
 - **Utilise la bibliothèque reconnue** quand il en existe une, plutôt que de réécrire une version moins bonne.
 - **N'invente aucune donnée** : ni nom, ni endpoint, ni chiffre. Vérifie ou signale ce qui manque.
 - **Aucun langage interne dans ce que voit l'utilisateur** : pas de nom de code, de TODO ni de raisonnement dans les textes de l'app.
-- **Les commits portent `[skip ci]`** tant que Nicolas n'a pas demandé de lancer la CI.
+- **Les commits portent `[skip ci]`** tant que le mainteneur n'a pas demandé de lancer la CI.
 
 ## Avant d'ouvrir ou de mettre à jour une PR
 
@@ -55,7 +55,7 @@ Indique aussi dans la description ce que tu as changé et pourquoi, ce que tu n'
 Mauvais exemple : « Le 4 mars, vérifier le z-index de la bannière du paiement. »
 Bon exemple : « Après tout changement de mise en page, vérifier qu'aucun élément cliquable n'est masqué. »
 
-## Quand t'arrêter et demander à Nicolas
+## Quand t'arrêter et demander au mainteneur
 
 Arrête-toi et demande avant de :
 

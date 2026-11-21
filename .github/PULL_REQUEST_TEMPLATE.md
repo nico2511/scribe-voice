@@ -24,7 +24,7 @@ Un paragraphe : ce que l'utilisateur peut faire maintenant, ou ce qui ne se prod
 - Ce que je n'ai pas changé et qu'on pourrait attendre :
 - Ce dont je ne suis pas sûr :
 
-## Accord de Nicolas requis
+## Accord du mainteneur requis
 
 - [ ] Fusion, tag, build distribué ou publication
 - [ ] Relance de la CI
