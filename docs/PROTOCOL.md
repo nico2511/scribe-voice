@@ -95,7 +95,7 @@ le worker réessaie sur CPU en `int8`. Sur CPU, `int8_float16` et `float16` devi
 - Variable d'environnement : `SCRIBE_VOICE_MODELS_DIR`, qui désigne le dossier racine ou
   directement un modèle CTranslate2.
 - Ordre de priorité : `config.models_dir`, puis `SCRIBE_VOICE_MODELS_DIR`, puis le dossier par
-  défaut `~/Documents/CyberScribeNote/models`. Le dossier par défaut sert de destination aux
+  défaut `~/Documents/scribe-voice/models`. Le dossier par défaut sert de destination aux
   téléchargements Hugging Face ; il n'est pas utilisé en mode hors ligne.
 
 **Résolution** (dans cet ordre, pour un `model_size` donné) :
@@ -120,10 +120,10 @@ Les erreurs de résolution sont émises sous la forme `Chargement modèle : <mes
 
 **Journal**
 
-- Le fichier `~/Documents/CyberScribeNote/voice_worker.log` est créé au démarrage du worker,
+- Le fichier `~/Documents/scribe-voice/voice_worker.log` est créé au démarrage du worker,
   pas à l'import du module.
 - Après un `init` qui contient `app_id`, le journal est écrit dans
-  `~/Documents/CyberScribeNote/<app_id>/voice_worker.log`.
+  `~/Documents/scribe-voice/<app_id>/voice_worker.log`.
 - **Vie privée** : par défaut, le journal ne contient pas le texte transcrit, seulement des
   métadonnées comme la durée, le RMS ou le nombre de caractères. Pour le débogage, activer
   `log_transcripts` à `true` dans `config`, ou la variable d'environnement

@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec — CyberScribeNote voice worker sidecar
-# Build:  cd voice && pyinstaller voice_worker.spec
-# Output: voice/dist/voice_worker.exe  (copied next to cyberscribe-note.exe / resources)
+# PyInstaller spec — scribe-voice worker
+# Build:  pyinstaller voice_worker.spec  (à la racine du dépôt ou via build.ps1)
+# Output: dist/voice_worker.exe
 
 from PyInstaller.utils.hooks import collect_data_files
 
@@ -48,7 +48,7 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,  # sous-système console : stdin/stdout pipés fiables (Tauri masque via CREATE_NO_WINDOW)
+    console=True,  # sous-système console : stdin/stdout pipés fiables pour le processus parent
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

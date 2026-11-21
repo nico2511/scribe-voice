@@ -4,14 +4,44 @@ Worker de dictée vocale **local** : reconnaissance vocale avec
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper), piloté par une application
 cliente via un protocole **JSON Lines** sur stdin/stdout.
 
+Version du worker : **1.1.1** ; version du protocole : **4**.
+
+## À quoi ça sert
+
+`scribe-voice` est un processus fils de reconnaissance vocale **100 % local** (hors ligne
+une fois les modèles sur le disque). L'application qui lance le worker lui envoie des
+commandes JSON sur **stdin** et lit des événements JSON sur **stdout**. PyAudio et le
+modèle Whisper restent en mémoire entre les dictées, ce qui évite de relancer Python et
+de recharger le modèle à chaque prise.
+
+## Cas d'usage
+
+Ces cas décrivent uniquement ce que le code fait aujourd'hui :
+
+- **Dictée push-to-talk** : le parent envoie `start` pour enregistrer le micro,
+  `stop` (ou un second `toggle`) pour arrêter ; le worker émet `transcript` avec le
+  texte reconnu. `toggle` démarre ou arrête selon l'état courant.
+- **Commandes vocales** : si la transcription commence par le mot-clé configuré
+  (défaut `Scribe`) ou un de ses alias, l'événement `transcript` contient un champ
+  `command` avec le mot-clé et le reste de la phrase. Le worker n'exécute aucune action.
+- **Confirmation oui/non** : la commande `confirm` lance une courte écoute et renvoie
+  `confirmation` avec `answer` (`yes`, `no` ou `unknown`) et le texte entendu.
+- **Plusieurs applications** : `app_id` dans la config de `init` sépare les fichiers
+  journaux (`~/Documents/scribe-voice/<app_id>/voice_worker.log`).
+- **Sans réseau** : avec `"offline": true` et un `models_dir` (ou
+  `SCRIBE_VOICE_MODELS_DIR`) qui pointe vers des modèles déjà présents, aucun
+  téléchargement Hugging Face n'a lieu.
+- **Confidentialité des journaux** : par défaut, le texte transcrit n'est pas écrit dans
+  `voice_worker.log` ; seules des métadonnées (durée, RMS, etc.) y figurent.
+
+## Architecture
+
 - Un seul processus permanent : PyAudio et le modèle Whisper restent en mémoire entre les dictées.
 - Transcription locale. Le réseau sert seulement à obtenir le modèle depuis Hugging Face
   lorsqu'aucun modèle local ne correspond. Avec `"offline": true`, le worker n'utilise que des
   modèles déjà présents sur le disque et ne télécharge rien.
 - Détection d'un mot-clé en début de phrase (par défaut `Scribe`) et commande de
   confirmation oui/non.
-
-Version du worker : **1.1.1** ; version du protocole : **4**.
 
 ## Utilisation
 
@@ -81,7 +111,7 @@ Le dossier des modèles est choisi dans cet ordre de priorité :
 
 1. `models_dir` dans la `config` de `init` ;
 2. la variable d'environnement `SCRIBE_VOICE_MODELS_DIR` ;
-3. le dossier par défaut `~/Documents/CyberScribeNote/models`.
+3. le dossier par défaut `~/Documents/scribe-voice/models`.
 
 Le worker accepte une racine de cache Hugging Face (`models--Systran--faster-whisper-small/...`),
 des dossiers plats (`small/`, `faster-whisper-small/`, `whisper-small/`) ou le chemin direct d'un
@@ -98,8 +128,8 @@ send({"cmd": "init", "config": {
 
 ### Journal
 
-- Fichier `~/Documents/CyberScribeNote/voice_worker.log`, ou
-  `~/Documents/CyberScribeNote/<app_id>/voice_worker.log` après un `init` avec `app_id`.
+- Fichier `~/Documents/scribe-voice/voice_worker.log`, ou
+  `~/Documents/scribe-voice/<app_id>/voice_worker.log` après un `init` avec `app_id`.
 - stdout est réservé au protocole.
 - Par défaut, le texte transcrit n'est pas écrit dans le journal. Pour l'inclure, lancer le
   worker avec la variable d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`).
@@ -132,8 +162,6 @@ Sans `-Version`, la version vaut `dev`.
 - `requirements-dev.txt` : dépendances des tests (`pytest`, `numpy`).
 - `voice_worker.spec` : spec PyInstaller en un seul fichier, en mode console. Elle embarque les
   données de faster-whisper (dont `silero_vad_v6.onnx`, nécessaire au VAD) et exclut `av`.
-- `build_sidecar.ps1` : ancien script d'intégration Tauri. Il suppose un dossier `voice/` et
-  copie l'exe dans `src-tauri/binaries/`. Ni `build.ps1` ni la CI ne l'utilisent.
 
 ### CI
 

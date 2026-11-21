@@ -19,7 +19,7 @@ def log_home(monkeypatch, tmp_path):
     monkeypatch.setattr(
         vw,
         "DEFAULT_LOG_ROOT",
-        str(home / "Documents" / "CyberScribeNote"),
+        str(home / "Documents" / "scribe-voice"),
     )
     vw._logging_ready = False
     vw._fault_fp = None
@@ -27,7 +27,7 @@ def log_home(monkeypatch, tmp_path):
 
 
 def _log_file(home: Path) -> Path:
-    return home / "Documents" / "CyberScribeNote" / "voice_worker.log"
+    return home / "Documents" / "scribe-voice" / "voice_worker.log"
 
 
 def _loud_wav(path: Path, seconds: float = 1.0) -> None:

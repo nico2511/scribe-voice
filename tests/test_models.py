@@ -173,7 +173,7 @@ def test_import_creates_no_directories(tmp_path):
         check=True,
         cwd=str(ROOT),
     )
-    assert not (home / "Documents" / "CyberScribeNote").exists()
+    assert not (home / "Documents" / "scribe-voice").exists()
 
 
 def test_ready_includes_version_and_protocol(worker_factory):
