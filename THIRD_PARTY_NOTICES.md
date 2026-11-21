@@ -42,7 +42,7 @@ distributions de chaque projet.
 
 - **Modèles Whisper** (format CTranslate2, par exemple `Systran/faster-whisper-small`) : fournis par
   l'utilisateur (`models_dir`, `SCRIBE_VOICE_MODELS_DIR`) ou téléchargés à l'exécution depuis
-  Hugging Face, dans `~/Documents/CyberScribeNote/models` par défaut. Les poids Whisper d'OpenAI sont
+  Hugging Face, dans `~/Documents/scribe-voice/models` par défaut. Les poids Whisper d'OpenAI sont
   sous licence MIT.
 
 ## PyAV / FFmpeg (non embarqués)

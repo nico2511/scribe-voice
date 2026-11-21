@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """
-CyberScribeNote — Voice worker (sidecar)
+scribe-voice — worker de reconnaissance vocale local.
 
-Flux audio / Whisper aligné sur CyberScribe
-(https://github.com/nico2511/CyberScribe) :
-  - un seul process Python permanent
-  - PyAudio + WhisperModel gardés en mémoire entre les dictées
-  - mêmes presets VAD / transcription que CyberScribe
-
-Communication JSON stdin/stdout pour le parent Tauri.
+Processus Python permanent : PyAudio et le modèle faster-whisper restent chargés entre
+les dictées. L'application parente pilote le worker via JSON Lines sur stdin/stdout.
 """
 
 from __future__ import annotations
@@ -89,10 +84,10 @@ PROTOCOL_VERSION = 4
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DOWNLOAD_ROOT = os.path.join(
-    os.path.expanduser("~"), "Documents", "CyberScribeNote", "models"
+    os.path.expanduser("~"), "Documents", "scribe-voice", "models"
 )
 DEFAULT_LOG_ROOT = os.path.join(
-    os.path.expanduser("~"), "Documents", "CyberScribeNote"
+    os.path.expanduser("~"), "Documents", "scribe-voice"
 )
 
 _logging_ready = False
@@ -549,7 +544,7 @@ def check_deps() -> tuple[bool, str | None]:
 
 
 class AudioRecorder:
-    """Identique à CyberScribe.AudioRecorder — PyAudio permanent."""
+    """Enregistrement micro via PyAudio ; instance réutilisée entre les dictées."""
 
     def __init__(self) -> None:
         import pyaudio
@@ -619,7 +614,7 @@ class AudioRecorder:
         if not frames:
             return None
 
-        fd, path = tempfile.mkstemp(suffix=".wav", prefix="csnote_")
+        fd, path = tempfile.mkstemp(suffix=".wav", prefix="scribe_voice_")
         os.close(fd)
         try:
             with wave.open(path, "wb") as wf:
@@ -646,7 +641,7 @@ class AudioRecorder:
 
 
 class Transcriber:
-    """Identique à CyberScribe.Transcriber — modèle chargé une fois, gardé en RAM."""
+    """Chargement du modèle Whisper une fois, transcription sur fichiers WAV."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config

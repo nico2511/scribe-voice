@@ -1,7 +1,6 @@
 # Dépendances d'exécution FIGÉES de scribe-voice v1.0.
 #
-# Versions relevées dans le voice_worker.exe actuellement distribué avec
-# CyberScribeNote (CyberScribeNote-win.zip, exe du 2026-09-29, Python 3.11.9,
+# Versions relevées dans un voice_worker.exe de référence (build du 2026-09-29, Python 3.11.9,
 # SHA-256 36f27355c1d42ee7398a9f8654953baace31569b42c569fe805882cb923c008a),
 # par extraction PyInstaller (pyinstxtractor-ng) et lecture des métadonnées
 # (dist-info, version.py, chaînes __version__ des modules natifs).

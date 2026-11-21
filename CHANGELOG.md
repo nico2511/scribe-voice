@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Rupture : dossiers par défaut
+
+Le worker utilise désormais `~/Documents/scribe-voice` pour les journaux et
+`~/Documents/scribe-voice/models` pour les modèles téléchargés (y compris
+`voice_worker.log` et `<app_id>/voice_worker.log`). Les installations qui
+laissaient modèles ou journaux dans l'ancien emplacement par défaut ne les
+retrouveront pas sans les déplacer ou sans retélécharger les modèles.
+Aucun repli automatique vers l'ancien dossier.
+
 - `log_transcripts` dans `config` est pris en charge (booléen, défaut `false`). La variable
   d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS` force l'activation lorsqu'elle vaut vrai ; sinon
   c'est la config qui s'applique.

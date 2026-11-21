@@ -3,8 +3,8 @@
 #   .\build.ps1 -Version v1.0.0
 #
 # Requiert : CPython 3.11 x64 (l'exe de référence a été produit avec 3.11.9).
-# Le build reprend tel quel voice_worker.spec (identique à CyberScribeNote).
-# build_sidecar.ps1 reste le script historique propre à CyberScribeNote (Tauri).
+# Le build utilise voice_worker.spec à la racine du dépôt.
+# build_sidecar.ps1 est un script historique conservé ; ni build.ps1 ni la CI ne l'invoquent.
 
 param(
   [string]$Version = "dev"
