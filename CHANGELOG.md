@@ -2,6 +2,9 @@
 
 ## Non publié
 
+- Protocole **5** : champ optionnel `end_on_silence_ms` sur `start` et `confirm` pour arrêter
+  l'écoute après un silence continu une fois la parole détectée (détection Silero ou RMS).
+- Lanceur : `--end-on-silence-ms` (défaut 700, `0` pour désactiver) transmis à `confirm`.
 - Lanceur vocal de démonstration : `examples/voice_launcher.py` et fichier d'actions
   `examples/launcher_actions.example.json` (actions `run`, `open`, `say`, confirmation optionnelle).
 - Synthèse vocale optionnelle Kokoro (`examples/requirements-launcher.txt`) : invitation à confirmer

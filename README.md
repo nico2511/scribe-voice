@@ -4,7 +4,7 @@ Worker de dictée vocale **local** : reconnaissance vocale avec
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper), piloté par une application
 cliente via un protocole **JSON Lines** sur stdin/stdout.
 
-Version du worker : **1.2.0** ; version du protocole : **4**.
+Version du worker : **1.2.0** ; version du protocole : **5**.
 
 ## À quoi ça sert
 
@@ -20,7 +20,8 @@ Ces cas décrivent uniquement ce que le code fait aujourd'hui :
 
 - **Dictée push-to-talk** : le parent envoie `start` pour enregistrer le micro,
   `stop` (ou un second `toggle`) pour arrêter ; le worker émet `transcript` avec le
-  texte reconnu. `toggle` démarre ou arrête selon l'état courant.
+  texte reconnu. `toggle` démarre ou arrête selon l'état courant. Option
+  `end_on_silence_ms` sur `start` ou `confirm` : arrêt automatique après fin de parole.
 - **Commandes vocales** : si la transcription commence par le mot-clé configuré
   (défaut `Majordome`) ou un de ses alias, l'événement `transcript` contient un champ
   `command` avec le mot-clé et le reste de la phrase. Le worker n'exécute aucune action.
@@ -99,6 +100,7 @@ send({
 #                           seulement si la phrase commence par le mot-clé ou un alias
 
 send({"cmd": "confirm", "timeout": 4})
+send({"cmd": "confirm", "timeout": 6, "end_on_silence_ms": 700})
 # Événement confirmation -> {"answer": "yes" | "no" | "unknown", "text": "..."}
 ```
 
