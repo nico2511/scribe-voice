@@ -83,7 +83,7 @@ from voice_keyword import (
     transcript_command_payload,
 )
 
-WORKER_VERSION = "1.2.0"
+WORKER_VERSION = "1.3.0"
 PROTOCOL_VERSION = 5
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
