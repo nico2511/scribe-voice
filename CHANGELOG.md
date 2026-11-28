@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v1.2.0
+
+Version du worker **1.2.0**. Le protocole **4** ne change pas.
 
 ### Rupture : mot-clé par défaut
 

@@ -19,7 +19,7 @@ Dès le lancement, avant toute commande :
 
 ```json
 {"type": "deps", "ok": true}
-{"type": "ready", "version": "1.1.1", "protocol": 4}
+{"type": "ready", "version": "1.2.0", "protocol": 4}
 ```
 
 - `version` : version sémantique du worker (chaîne).
