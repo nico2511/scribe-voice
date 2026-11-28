@@ -4,7 +4,7 @@ Worker de dictée vocale **local** : reconnaissance vocale avec
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper), piloté par une application
 cliente via un protocole **JSON Lines** sur stdin/stdout.
 
-Version du worker : **1.2.0** ; version du protocole : **5**.
+Version du worker : **1.3.0** ; version du protocole : **5**.
 
 ## À quoi ça sert
 
@@ -251,8 +251,8 @@ versions dans [CHANGELOG.md](CHANGELOG.md).
 Windows x64, CPython **3.11** (la CI de release utilise 3.11.9) :
 
 ```powershell
-.\build.ps1 -Version v1.2.0
-# -> release\voice_worker.exe, release\scribe-voice-v1.2.0-win-x64.zip, release\SHA256SUMS
+.\build.ps1 -Version v1.3.0
+# -> release\voice_worker.exe, release\scribe-voice-v1.3.0-win-x64.zip, release\SHA256SUMS
 ```
 
 `build.ps1` installe `requirements-build.txt`, lance PyInstaller avec `voice_worker.spec`, puis
