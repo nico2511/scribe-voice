@@ -555,6 +555,11 @@ def _default_send_confirm(
     return str(answer) if answer is not None else "unknown"
 
 
+def apply_models_dir_from_env(args: argparse.Namespace) -> None:
+    if not args.models_dir and (env := os.environ.get("SCRIBE_VOICE_MODELS_DIR")):
+        args.models_dir = env
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Lanceur vocal de demonstration pour voice_worker."
@@ -616,7 +621,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="affiche le delai entre la question de confirmation et la reponse worker",
     )
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    apply_models_dir_from_env(args)
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
