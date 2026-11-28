@@ -1,7 +1,7 @@
-"""Tests unitaires du traitement des commandes courtes « Scribe, … ».
+"""Tests unitaires du traitement des commandes courtes « Majordome, … ».
 
 Contrat v1.1 :
-  - initial_prompt « Scribe. » sur chaque passe (sans hotwords) ;
+  - initial_prompt « Majordome. » sur chaque passe (sans hotwords) ;
   - porte VAD (Silero) avant Whisper si durée < 8 s ;
   - texte mot-clé seul -> "" ;
   - VAD Whisper seulement si durée >= 3,5 s (et si le profil l'active) ;
@@ -37,7 +37,7 @@ def synthetic_wav_counts_as_speech(monkeypatch):
 class FakeModel:
     def __init__(
         self,
-        texts=("Scribe, corrige.",),
+        texts=("Majordome, corrige.",),
         raise_type_error_once=False,
         no_speech_probs=None,
     ):
@@ -92,11 +92,11 @@ def make_wav(tmp_path, seconds, amplitude=3000, rate=16000):
 
 
 def test_command_constants():
-    assert vw.COMMAND_PROMPT == "Scribe."
+    assert vw.COMMAND_PROMPT == "Majordome."
 
 
 def test_transcribe_passes_float32_ndarray_to_model(tmp_path):
-    m = FakeModel(["Scribe, bonjour."])
+    m = FakeModel(["Majordome, bonjour."])
     t = make_transcriber(m)
     path = make_wav(tmp_path, 1.5)
     t.transcribe(path)
@@ -108,7 +108,7 @@ def test_transcribe_passes_float32_ndarray_to_model(tmp_path):
     assert len(audio) == int(1.5 * 16000)
 
 
-@pytest.mark.parametrize("raw", ["Scribe Scribe.", "scribe", "SCRIBE !"])
+@pytest.mark.parametrize("raw", ["Majordome Majordome.", "majordome", "MAJORDOME !"])
 def test_keyword_only_filtered(tmp_path, raw):
     m = FakeModel([raw])
     t = make_transcriber(m)
@@ -116,19 +116,19 @@ def test_keyword_only_filtered(tmp_path, raw):
 
 
 def test_real_scribe_command_preserved(tmp_path):
-    m = FakeModel(["Scribe, corrige le texte."])
+    m = FakeModel(["Majordome, corrige le texte."])
     t = make_transcriber(m)
-    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Scribe, corrige le texte."
+    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Majordome, corrige le texte."
 
 
 def test_is_keyword_only_helper():
-    assert vw._is_keyword_only("Scribe Scribe.")
-    assert vw._is_keyword_only("SCRIBE !")
-    assert not vw._is_keyword_only("Scribe, corrige le texte.")
+    assert vw._is_keyword_only("Majordome Majordome.")
+    assert vw._is_keyword_only("MAJORDOME !")
+    assert not vw._is_keyword_only("Majordome, corrige le texte.")
 
 
 def test_has_speech_false_skips_model(tmp_path, monkeypatch):
-    m = FakeModel(["Scribe, traduis."])
+    m = FakeModel(["Majordome, traduis."])
     t = make_transcriber(m)
     monkeypatch.setattr(t, "_has_speech", lambda _path: False)
     assert t.transcribe(make_wav(tmp_path, 1.5)) == ""
@@ -136,7 +136,7 @@ def test_has_speech_false_skips_model(tmp_path, monkeypatch):
 
 
 def test_has_speech_failure_allows_transcription(tmp_path, monkeypatch):
-    m = FakeModel(["Scribe, corrige."])
+    m = FakeModel(["Majordome, corrige."])
     t = make_transcriber(m)
     monkeypatch.setattr(vw.Transcriber, "_has_speech", _ORIGINAL_HAS_SPEECH)
 
@@ -144,12 +144,12 @@ def test_has_speech_failure_allows_transcription(tmp_path, monkeypatch):
         raise RuntimeError("vad indisponible")
 
     monkeypatch.setattr("faster_whisper.vad.get_speech_timestamps", _boom)
-    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Scribe, corrige."
+    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Majordome, corrige."
     assert len(m.calls) >= 1
 
 
 def test_short_clip_drops_high_no_speech_segment(tmp_path):
-    m = FakeModel(["Scribe Scribe."], no_speech_probs=[0.9])
+    m = FakeModel(["Majordome Majordome."], no_speech_probs=[0.9])
     t = make_transcriber(m)
     preset = vw.PROFILE_PRESETS["fast"]
     audio = vw._load_wav_mono_float32(make_wav(tmp_path, 2.0))
@@ -166,15 +166,15 @@ def test_short_clip_drops_high_no_speech_segment(tmp_path):
 
 @pytest.mark.parametrize("seconds", [1.0, 2.0, 3.49])
 def test_short_scribe_command_no_vad(tmp_path, seconds):
-    m = FakeModel(["Scribe, résume."])
+    m = FakeModel(["Majordome, résume."])
     t = make_transcriber(m)
-    assert t.transcribe(make_wav(tmp_path, seconds)) == "Scribe, résume."
+    assert t.transcribe(make_wav(tmp_path, seconds)) == "Majordome, résume."
     assert len(m.calls) == 1
     c = m.calls[0]
     assert c["vad_filter"] is False
     assert "vad_parameters" not in c
     assert c["condition_on_previous_text"] is False
-    assert c["initial_prompt"] == "Scribe."
+    assert c["initial_prompt"] == "Majordome."
     assert "hotwords" not in c
     assert c["without_timestamps"] is True
     assert c["language"] == "fr"
@@ -191,22 +191,22 @@ def test_long_dictation_uses_vad(tmp_path, seconds):
     assert c["vad_parameters"] == vw.PROFILE_PRESETS["fast"]["vad_parameters"]
     assert c["condition_on_previous_text"] is True
     assert c["no_speech_threshold"] == 0.6
-    assert c["initial_prompt"] == "Scribe."
+    assert c["initial_prompt"] == "Majordome."
     assert "hotwords" not in c
 
 
 @pytest.mark.parametrize("seconds", [1.5, 5.0, 7.9])
 def test_empty_result_retries_without_vad(tmp_path, seconds):
-    m = FakeModel(["", "Scribe, traduis."])
+    m = FakeModel(["", "Majordome, traduis."])
     t = make_transcriber(m)
-    assert t.transcribe(make_wav(tmp_path, seconds)) == "Scribe, traduis."
+    assert t.transcribe(make_wav(tmp_path, seconds)) == "Majordome, traduis."
     assert len(m.calls) == 2
     retry = m.calls[1]
     assert retry["vad_filter"] is False
     assert "vad_parameters" not in retry
     assert retry["condition_on_previous_text"] is False
     assert retry["no_speech_threshold"] == 0.35
-    assert retry["initial_prompt"] == "Scribe."
+    assert retry["initial_prompt"] == "Majordome."
     assert "hotwords" not in retry
 
 
@@ -232,13 +232,13 @@ def test_too_quiet_audio_skipped(tmp_path):
 
 
 def test_type_error_fallback_drops_without_timestamps(tmp_path):
-    m = FakeModel(["Scribe, corrige."], raise_type_error_once=True)
+    m = FakeModel(["Majordome, corrige."], raise_type_error_once=True)
     t = make_transcriber(m)
-    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Scribe, corrige."
+    assert t.transcribe(make_wav(tmp_path, 1.5)) == "Majordome, corrige."
     assert len(m.calls) == 2
     assert "hotwords" not in m.calls[0]
     assert "without_timestamps" not in m.calls[1]
-    assert m.calls[1]["initial_prompt"] == "Scribe."
+    assert m.calls[1]["initial_prompt"] == "Majordome."
 
 
 def test_language_auto_maps_to_none(tmp_path):

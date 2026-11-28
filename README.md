@@ -22,7 +22,7 @@ Ces cas décrivent uniquement ce que le code fait aujourd'hui :
   `stop` (ou un second `toggle`) pour arrêter ; le worker émet `transcript` avec le
   texte reconnu. `toggle` démarre ou arrête selon l'état courant.
 - **Commandes vocales** : si la transcription commence par le mot-clé configuré
-  (défaut `Scribe`) ou un de ses alias, l'événement `transcript` contient un champ
+  (défaut `Majordome`) ou un de ses alias, l'événement `transcript` contient un champ
   `command` avec le mot-clé et le reste de la phrase. Le worker n'exécute aucune action.
 - **Confirmation oui/non** : la commande `confirm` lance une courte écoute et renvoie
   `confirmation` avec `answer` (`yes`, `no` ou `unknown`) et le texte entendu.
@@ -40,7 +40,7 @@ Ces cas décrivent uniquement ce que le code fait aujourd'hui :
 - Transcription locale. Le réseau sert seulement à obtenir le modèle depuis Hugging Face
   lorsqu'aucun modèle local ne correspond. Avec `"offline": true`, le worker n'utilise que des
   modèles déjà présents sur le disque et ne télécharge rien.
-- Détection d'un mot-clé en début de phrase (par défaut `Scribe`) et commande de
+- Détection d'un mot-clé en début de phrase (par défaut `Majordome`) et commande de
   confirmation oui/non.
 
 ## Utilisation
@@ -88,14 +88,14 @@ send({
     "config": {
         "language": "fr",
         "model_size": "small",
-        "keyword": "Scribe",
-        "keyword_aliases": ["scrybe"],   # variantes produites par la reconnaissance
+        "keyword": "Majordome",
+        "keyword_aliases": ["Major dome"],  # remplace la liste par défaut si fournie
         "app_id": "mon-app",             # journal séparé pour cette application
     },
 })
 # Événement transcript :
 #   evt["text"]          -> transcription brute
-#   evt.get("command")   -> {"keyword": "Scribe", "text": "ouvre les paramètres."}
+#   evt.get("command")   -> {"keyword": "Majordome", "text": "ouvre les paramètres."}
 #                           seulement si la phrase commence par le mot-clé ou un alias
 
 send({"cmd": "confirm", "timeout": 4})
@@ -104,6 +104,19 @@ send({"cmd": "confirm", "timeout": 4})
 
 Le worker n'exécute aucune action : il renvoie le texte et la classification, et c'est
 l'application cliente qui décide quoi faire.
+
+### Essayer avec le client de démo
+
+À la racine du dépôt, après `pip install -r requirements.txt` :
+
+```bash
+python examples/demo_client.py
+```
+
+Le client lance `python voice_worker.py` à côté du dépôt. Options utiles :
+`--exe` (binaire à la place du script), `--model`, `--models-dir`, `--offline`, `--keyword`.
+Après le chargement du modèle, **Entrée** démarre et arrête l'enregistrement ; **q** + Entrée
+envoie `shutdown` et quitte. Les événements du protocole s'affichent dans la console.
 
 ### Modèles
 

@@ -73,9 +73,12 @@ _install_pyav_import_stub()
 
 from voice_keyword import (
     COMMAND_PROMPT,
+    DEFAULT_KEYWORD,
+    DEFAULT_KEYWORD_ALIASES,
     KeywordConfig,
     classify_confirmation,
     is_keyword_only,
+    normalize_token,
     transcript_command_payload,
 )
 
@@ -142,8 +145,8 @@ DEFAULT_CONFIG = {
     "models_dir": None,
     "offline": False,
     "app_id": None,
-    "keyword": "Scribe",
-    "keyword_aliases": [],
+    "keyword": DEFAULT_KEYWORD,
+    "keyword_aliases": list(DEFAULT_KEYWORD_ALIASES),
     "log_transcripts": False,
 }
 
@@ -450,14 +453,17 @@ def sanitize_config(data: dict[str, Any] | None) -> dict[str, Any]:
     cfg["app_id"] = _sanitize_app_id(cfg.get("app_id"))
     kw = str(cfg.get("keyword") or DEFAULT_CONFIG["keyword"]).strip()
     cfg["keyword"] = kw[:120] if kw else DEFAULT_CONFIG["keyword"]
-    raw_aliases = data.get("keyword_aliases") if isinstance(data, dict) else None
-    aliases: list[str] = []
-    if isinstance(raw_aliases, list):
-        for item in raw_aliases:
-            s = str(item).strip()
-            if s:
-                aliases.append(s[:120])
-    cfg["keyword_aliases"] = aliases[:32]
+    if isinstance(data, dict) and "keyword_aliases" in data:
+        raw_aliases = data.get("keyword_aliases")
+        aliases: list[str] = []
+        if isinstance(raw_aliases, list):
+            for item in raw_aliases:
+                s = str(item).strip()
+                if s:
+                    aliases.append(s[:120])
+        cfg["keyword_aliases"] = aliases[:32]
+    elif normalize_token(cfg["keyword"]) != normalize_token(DEFAULT_KEYWORD):
+        cfg["keyword_aliases"] = []
     explicit_dir = data.get("models_dir") if isinstance(data, dict) else None
     if explicit_dir is not None and str(explicit_dir).strip():
         cfg["models_dir"] = _normalize_models_dir(explicit_dir)
@@ -810,7 +816,7 @@ class Transcriber:
                     lang = None
                 profile = self.config.get("transcription_profile") or "fast"
                 preset = PROFILE_PRESETS.get(profile, PROFILE_PRESETS["fast"])
-                # Les commandes « Scribe, … » durent 1–3 s : le VAD les avale souvent.
+                # Les commandes courtes « mot-clé, … » durent 1–3 s : le VAD les avale souvent.
                 use_vad = bool(preset["vad_filter"]) and duration >= 3.5
                 text = self._transcribe_once(
                     audio,

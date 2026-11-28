@@ -29,8 +29,8 @@ def test_valid_values_kept_and_normalized():
         "models_dir": None,
         "offline": False,
         "app_id": None,
-        "keyword": "Scribe",
-        "keyword_aliases": [],
+        "keyword": "Majordome",
+        "keyword_aliases": list(vw.DEFAULT_CONFIG["keyword_aliases"]),
         "log_transcripts": False,
     }
 
@@ -56,6 +56,39 @@ def test_log_transcripts_priority(monkeypatch, env, config, expected):
         monkeypatch.setenv("SCRIBE_VOICE_LOG_TRANSCRIPTS", env)
     cfg = vw.sanitize_config(config)
     assert vw._log_transcripts_enabled(cfg) is expected
+
+
+def test_keyword_aliases_in_config_replaces_default():
+    custom = vw.sanitize_config({"keyword_aliases": ["alias-a"]})
+    assert custom["keyword_aliases"] == ["alias-a"]
+    empty = vw.sanitize_config({"keyword_aliases": []})
+    assert empty["keyword_aliases"] == []
+
+
+def test_custom_keyword_without_aliases_drops_majordome_defaults():
+    cfg = vw.sanitize_config({"keyword": "Jarvis"})
+    assert cfg["keyword"] == "Jarvis"
+    assert cfg["keyword_aliases"] == []
+
+
+def test_default_aliases_only_with_default_keyword():
+    import voice_keyword as vk
+
+    assert vw.sanitize_config({})["keyword_aliases"] == list(
+        vw.DEFAULT_CONFIG["keyword_aliases"]
+    )
+    assert vw.sanitize_config({"keyword": "Majordome"})["keyword_aliases"] == list(
+        vw.DEFAULT_CONFIG["keyword_aliases"]
+    )
+    assert vw.sanitize_config({"keyword": "MAJORDÔME"})["keyword_aliases"] == list(
+        vw.DEFAULT_CONFIG["keyword_aliases"]
+    )
+    jarvis = vk.KeywordConfig.from_config(vw.sanitize_config({"keyword": "Jarvis"}))
+    assert jarvis.parse_command("Major d'homme, ouvre.") is None
+    assert jarvis.parse_command("Jarvis, ouvre.") == {
+        "keyword": "Jarvis",
+        "text": "ouvre.",
+    }
 
 
 def test_invalid_values_fall_back():

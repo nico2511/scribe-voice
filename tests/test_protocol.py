@@ -177,23 +177,23 @@ def _dictate(w, seconds):
 
 
 def test_full_dictation_cycle_short_scribe_command(worker_factory, tmp_path):
-    fw, calls = _fake_whisper(tmp_path, texts=["Scribe, corrige le texte."])
+    fw, calls = _fake_whisper(tmp_path, texts=["Majordome, corrige le texte."])
     w = worker_factory(FAKE_WHISPER=fw)
     w.wait_type("ready")
     w.send(INIT)
     w.wait_type("model", loaded=True)
     tr = _dictate(w, 1.2)
-    assert tr["text"] == "Scribe, corrige le texte."
+    assert tr["text"] == "Majordome, corrige le texte."
     assert tr.get("command") == {
-        "keyword": "Scribe",
+        "keyword": "Majordome",
         "text": "corrige le texte.",
     }
     c = _read_calls(calls)
     assert len(c) == 1
-    # Commande courte « Scribe, … » (< 3,5 s) : pas de VAD Whisper, prompt Scribe seul.
+    # Commande courte « Majordome, … » (< 3,5 s) : pas de VAD Whisper, prompt Majordome seul.
     assert c[0]["vad_filter"] is False
     assert "vad_parameters" not in c[0]
-    assert c[0]["initial_prompt"] == "Scribe."
+    assert c[0]["initial_prompt"] == "Majordome."
     assert "hotwords" not in c[0]
     assert c[0]["condition_on_previous_text"] is False
     w.send({"cmd": "shutdown"})
@@ -201,13 +201,13 @@ def test_full_dictation_cycle_short_scribe_command(worker_factory, tmp_path):
 
 
 def test_short_command_empty_then_retry_without_vad(worker_factory, tmp_path):
-    fw, calls = _fake_whisper(tmp_path, texts=["", "Scribe, traduis en anglais."])
+    fw, calls = _fake_whisper(tmp_path, texts=["", "Majordome, traduis en anglais."])
     w = worker_factory(FAKE_WHISPER=fw)
     w.wait_type("ready")
     w.send(INIT)
     w.wait_type("model", loaded=True)
     tr = _dictate(w, 1.0)
-    assert tr["text"] == "Scribe, traduis en anglais."
+    assert tr["text"] == "Majordome, traduis en anglais."
     c = _read_calls(calls)
     assert len(c) == 2
     assert c[1]["vad_filter"] is False
@@ -248,7 +248,7 @@ def test_double_toggle_during_start_cancels_recording(worker_factory, tmp_path):
 
 
 def test_transcribe_busy_before_processing_thread(worker_factory, tmp_path):
-    fw, _ = _fake_whisper(tmp_path, texts=["Scribe, test."])
+    fw, _ = _fake_whisper(tmp_path, texts=["Majordome, test."])
     w = worker_factory(FAKE_WHISPER=fw)
     w.wait_type("ready")
     w.send(INIT)
@@ -264,13 +264,13 @@ def test_transcribe_busy_before_processing_thread(worker_factory, tmp_path):
     assert "Transcription encore en cours" in err["message"]
     assert any(e == {"type": "transcribing", "active": True} for e in w.events)
     tr = w.wait_type("transcript", timeout=30)
-    assert tr["text"] == "Scribe, test."
+    assert tr["text"] == "Majordome, test."
     w.send({"cmd": "shutdown"})
     assert w.close() == 0
 
 
 def test_vad_gate_no_speech_skips_model(worker_factory, tmp_path):
-    fw, calls = _fake_whisper(tmp_path, texts=["Scribe Scribe."])
+    fw, calls = _fake_whisper(tmp_path, texts=["Majordome Majordome."])
     w = worker_factory(FAKE_WHISPER=fw, FAKE_VAD='{"has_speech": false}')
     w.wait_type("ready")
     w.send(INIT)
@@ -283,7 +283,7 @@ def test_vad_gate_no_speech_skips_model(worker_factory, tmp_path):
 
 
 def test_start_stop_idempotent_ptt(worker_factory, tmp_path):
-    fw, calls = _fake_whisper(tmp_path, texts=["Scribe, salut."])
+    fw, calls = _fake_whisper(tmp_path, texts=["Majordome, salut."])
     w = worker_factory(FAKE_WHISPER=fw)
     w.wait_type("ready")
     w.send(INIT)
@@ -298,7 +298,7 @@ def test_start_stop_idempotent_ptt(worker_factory, tmp_path):
     w.wait_type("transcribing", active=True, timeout=30)
     w.wait_type("transcribing", active=False, timeout=30)
     tr = w.wait_type("transcript", timeout=30)
-    assert tr["text"] == "Scribe, salut."
+    assert tr["text"] == "Majordome, salut."
     w.send({"cmd": "stop"})
     assert w.wait_type("recording", active=False, timeout=2) == {
         "type": "recording",

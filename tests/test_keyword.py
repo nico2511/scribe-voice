@@ -80,8 +80,23 @@ def test_transcript_command_payload_helper():
     assert payload == {"keyword": "Scribe", "text": "test."}
 
 
+def test_default_majordome_aliases_parse():
+    cfg = vk.KeywordConfig.from_config({
+        "keyword": vk.DEFAULT_KEYWORD,
+        "keyword_aliases": list(vk.DEFAULT_KEYWORD_ALIASES),
+    })
+    assert cfg.parse_command("Major d'homme, ouvre.") == {
+        "keyword": "Majordome",
+        "text": "ouvre.",
+    }
+    assert cfg.parse_command("Majordôme, ouvre.") == {
+        "keyword": "Majordome",
+        "text": "ouvre.",
+    }
+
+
 def test_dictation_emits_command_field(worker_factory, tmp_path):
-    fw = json.dumps({"texts": ["Scribe, corrige le texte."]})
+    fw = json.dumps({"texts": ["Majordome, corrige le texte."]})
     w = worker_factory(FAKE_WHISPER=fw)
     w.wait_type("ready")
     w.send(INIT)
@@ -92,8 +107,8 @@ def test_dictation_emits_command_field(worker_factory, tmp_path):
     w.send({"cmd": "toggle"})
     w.wait_type("transcript", timeout=30)
     tr = w.events[-1]
-    assert tr["text"] == "Scribe, corrige le texte."
-    assert tr["command"] == {"keyword": "Scribe", "text": "corrige le texte."}
+    assert tr["text"] == "Majordome, corrige le texte."
+    assert tr["command"] == {"keyword": "Majordome", "text": "corrige le texte."}
     w.send({"cmd": "shutdown"})
     assert w.close() == 0
 

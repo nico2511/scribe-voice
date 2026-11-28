@@ -9,7 +9,15 @@ import re
 import unicodedata
 from typing import Any
 
-DEFAULT_KEYWORD = "Scribe"
+DEFAULT_KEYWORD = "Majordome"
+
+# Variantes de transcription non couvertes par la normalisation (casse, accents, ponctuation).
+DEFAULT_KEYWORD_ALIASES: tuple[str, ...] = (
+    "Major d'homme",
+    "Major dome",
+    "Majordom",
+    "Majordomes",
+)
 
 # Ponctuation / espaces ignorés en tête de phrase et après le mot-clé.
 _HEAD_PUNCT_CHARS = " \t\r\n.,;:!?…-—«»\"'()[]"
