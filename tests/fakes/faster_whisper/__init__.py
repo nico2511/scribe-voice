@@ -1,7 +1,7 @@
 """Faux ``faster_whisper`` pour les tests : aucun modèle téléchargé.
 
 FAKE_WHISPER (JSON) :
-  {"texts": ["", "Scribe, corrige."],   # textes renvoyés appel après appel (le dernier se répète)
+  {"texts": ["", "Majordome, corrige."],   # textes renvoyés appel après appel (le dernier se répète)
    "fail_load": false,                   # WhisperModel() lève une exception
    "calls_file": "/chemin/calls.jsonl"}  # chaque appel transcribe() y est journalisé (kwargs)
 """
@@ -58,7 +58,7 @@ class WhisperModel:
         self.compute_type = compute_type
         self.download_root = download_root
         self.local_files_only = local_files_only
-        self._texts = list(cfg.get("texts") or ["Scribe, corrige le texte."])
+        self._texts = list(cfg.get("texts") or ["Majordome, corrige le texte."])
         self._calls_file = cfg.get("calls_file")
 
     def transcribe(self, audio, **kwargs):

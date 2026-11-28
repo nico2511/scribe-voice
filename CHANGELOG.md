@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Rupture : mot-clé par défaut
+
+Le mot-clé vocal par défaut est désormais `Majordome` (au lieu de `Scribe`). Les
+applications qui s'appuyaient sur l'ancien défaut doivent passer `"keyword": "Scribe"`
+dans leur `config` de `init`, ou adopter le nouveau mot-clé. La liste par défaut
+`keyword_aliases` couvre des variantes de transcription probables (`Major d'homme`,
+`Major dome`, `Majordom`, `Majordomes`) ; une valeur fournie dans la config remplace
+cette liste entièrement (y compris `[]`).
+
+- Client de démonstration : `examples/demo_client.py` (stdlib, console Windows).
+
 ### Rupture : dossiers par défaut
 
 Le worker utilise désormais `~/Documents/scribe-voice` pour les journaux et

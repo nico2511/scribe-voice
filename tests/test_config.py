@@ -29,8 +29,8 @@ def test_valid_values_kept_and_normalized():
         "models_dir": None,
         "offline": False,
         "app_id": None,
-        "keyword": "Scribe",
-        "keyword_aliases": [],
+        "keyword": "Majordome",
+        "keyword_aliases": list(vw.DEFAULT_CONFIG["keyword_aliases"]),
         "log_transcripts": False,
     }
 
@@ -56,6 +56,13 @@ def test_log_transcripts_priority(monkeypatch, env, config, expected):
         monkeypatch.setenv("SCRIBE_VOICE_LOG_TRANSCRIPTS", env)
     cfg = vw.sanitize_config(config)
     assert vw._log_transcripts_enabled(cfg) is expected
+
+
+def test_keyword_aliases_in_config_replaces_default():
+    custom = vw.sanitize_config({"keyword_aliases": ["alias-a"]})
+    assert custom["keyword_aliases"] == ["alias-a"]
+    empty = vw.sanitize_config({"keyword_aliases": []})
+    assert empty["keyword_aliases"] == []
 
 
 def test_invalid_values_fall_back():

@@ -72,8 +72,8 @@ valeur par défaut, et non la valeur précédente.
 | `models_dir` | chemin (`~` développé, converti en chemin absolu) | `null` (voir plus bas) |
 | `offline` | booléen ; `true` interdit tout téléchargement (`local_files_only`) | `false` |
 | `app_id` | identifiant court ; les caractères hors `[\w.-]` sont remplacés par `_` (120 caractères au plus) | `null` |
-| `keyword` | mot-clé attendu en début de phrase (120 caractères au plus) | `Scribe` |
-| `keyword_aliases` | liste de variantes du mot-clé (32 au plus, 120 caractères chacune) | `[]` |
+| `keyword` | mot-clé attendu en début de phrase (120 caractères au plus) | `Majordome` |
+| `keyword_aliases` | liste de variantes du mot-clé (32 au plus, 120 caractères chacune) | `Major d'homme`, `Major dome`, `Majordom`, `Majordomes` |
 | `log_transcripts` | booléen : journalise les 180 premiers caractères de chaque transcription de dictée | `false` |
 
 Les booléens acceptent aussi les chaînes `1`, `true`, `yes` et `on` (casse indifférente).
@@ -187,7 +187,7 @@ Avec `start` / `stop` :
 ← {"type":"recording","active":false}
 ← {"type":"transcribing","active":true}
 ← {"type":"transcribing","active":false}
-← {"type":"transcript","text":"Scribe, corrige le texte.","command":{"keyword":"Scribe","text":"corrige le texte."}}
+← {"type":"transcript","text":"Majordome, corrige le texte.","command":{"keyword":"Majordome","text":"corrige le texte."}}
 → {"cmd":"stop"}
 ← {"type":"recording","active":false}
 ```
@@ -236,15 +236,19 @@ worker émet `confirmation` avec `answer:"unknown"` et `text:""`.
 - Le champ `command` est ajouté à `transcript` **seulement** si la transcription commence par
   `keyword` ou par un alias, suivi d'autre chose qu'une lettre ou un chiffre et d'un texte non vide.
   La casse, les accents, ainsi que les espaces et la ponctuation en tête, sont ignorés.
-  Exemples : « Scribe, corrige » donne `command.text` = `corrige` ; « le scribe corrige » ne
+  Exemples : « Majordome, corrige » donne `command.text` = `corrige` ; « le majordome corrige » ne
   donne pas de `command`.
 - `command.keyword` vaut toujours la forme canonique de `keyword`, même quand c'est un alias qui
   a été reconnu. `command.text` contient la suite de la phrase, sans la ponctuation qui suit le mot-clé.
 - Le champ `text` de `transcript` reste la transcription brute.
 - Si la transcription ne contient que le mot-clé ou des alias, éventuellement répétés et séparés
   par de la ponctuation, `transcript.text` est vide.
-- Chaque passe Whisper reçoit `initial_prompt="{keyword}."` (par exemple `Scribe.`). Les alias ne
+- Chaque passe Whisper reçoit `initial_prompt="{keyword}."` (par exemple `Majordome.`). Les alias ne
   servent qu'à la détection de `command` et au filtre « mot-clé seul », pas au prompt.
+- Si `keyword_aliases` est présent dans la config (y compris la liste vide `[]`), il remplace
+  entièrement la liste par défaut. Les variantes couvertes par la normalisation (casse, accents,
+  espaces et ponctuation en tête) n'ont pas besoin d'être listées : par exemple `Majordôme` est
+  reconnu sans alias.
 
 ## Traitement de l'audio d'une dictée
 
@@ -264,4 +268,5 @@ worker émet `confirmation` avec `answer:"unknown"` et `text:""`.
   ne sont pas utilisés.
 
 Tests associés : `tests/test_transcriber.py`, `tests/test_protocol.py`, `tests/test_keyword.py`,
-`tests/test_models.py`, `tests/test_config.py` et `tests/test_logging_privacy.py`.
+`tests/test_models.py`, `tests/test_config.py`, `tests/test_demo_client.py` et
+`tests/test_logging_privacy.py`.
