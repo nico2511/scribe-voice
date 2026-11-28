@@ -120,7 +120,25 @@ Chaque entrée du fichier JSON contient :
 
 - `phrases` : liste de formulations reconnues (comparaison sur `command.text`, normalisée) ;
 - `action` : `run` (`args` en liste, sans shell), `open` (`target` URL ou chemin), ou `say` (`message`) ;
-- `confirm` : si `true`, le lanceur demande une confirmation vocale (`confirm` / oui-non) avant d'agir.
+- `confirm` : si `true`, le lanceur annonce la question à l'écran et à voix haute, attend
+  la fin de la lecture, puis envoie `confirm` au worker (délai par défaut 6 s, `--confirm-timeout`).
+
+**Synthèse vocale optionnelle (Kokoro)** — pour guider l'utilisateur (question de confirmation,
+résultat de l'action). Sans ces paquets, le lanceur se contente d'afficher les messages :
+
+```bash
+pip install -r examples/requirements-launcher.txt
+```
+
+Le modèle [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (~82 M de paramètres,
+environ 350 Mo dans le cache Hugging Face) est téléchargé au premier usage. Voix française par
+défaut : `ff_siwis` (`--tts-voice`). Options : `--tts auto` (défaut), `kokoro`, `none`.
+Hors ligne : laisser Hugging Face mettre le modèle en cache lors d'une première exécution en ligne,
+ou copier le dossier `models--hexgrad--Kokoro-82M` du cache vers la machine cible (`HF_HOME` /
+`~/.cache/huggingface/hub`).
+
+Kokoro est sous licence [Apache-2.0](https://github.com/hexgrad/kokoro) ; il n'est pas embarqué
+dans `voice_worker.exe` (voir `THIRD_PARTY_NOTICES.md` pour les composants du binaire).
 
 ### Essayer avec le client de démo
 

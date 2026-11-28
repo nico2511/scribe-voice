@@ -14,7 +14,7 @@ import subprocess
 import sys
 import unicodedata
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 _EXAMPLES = Path(__file__).resolve().parent
 if str(_EXAMPLES) not in sys.path:
@@ -29,6 +29,119 @@ from demo_client import (  # noqa: E402
 )
 
 DEFAULT_ACTIONS = _EXAMPLES / "launcher_actions.example.json"
+DEFAULT_CONFIRM_TIMEOUT = 6.0
+KOKORO_LANG_CODE = "f"
+KOKORO_MODEL_ID = "hexgrad/Kokoro-82M"
+KOKORO_SAMPLE_RATE = 24_000
+
+
+class Speaker:
+    """Synthèse vocale optionnelle (Kokoro) avec repli sur l'affichage console."""
+
+    def __init__(
+        self,
+        mode: Literal["auto", "kokoro", "none"] = "auto",
+        voice: str = "ff_siwis",
+        *,
+        dry_run: bool = False,
+    ) -> None:
+        self.mode = mode
+        self.voice = voice
+        self.dry_run = dry_run
+        self._pipeline: Any = None
+        self._kokoro_ok: bool | None = None
+        self._play_ok: bool | None = None
+
+    def _kokoro_available(self) -> bool:
+        if self.mode == "none":
+            return False
+        if self._kokoro_ok is not None:
+            return self._kokoro_ok
+        if self.mode == "auto":
+            try:
+                import kokoro  # noqa: F401
+            except ImportError:
+                self._kokoro_ok = False
+                return False
+        try:
+            from kokoro import KPipeline  # noqa: F401
+        except ImportError:
+            self._kokoro_ok = False
+            return False
+        self._kokoro_ok = True
+        return True
+
+    def _playback_available(self) -> bool:
+        if self._play_ok is not None:
+            return self._play_ok
+        try:
+            import sounddevice  # noqa: F401
+        except ImportError:
+            self._play_ok = False
+            return False
+        self._play_ok = True
+        return True
+
+    def _should_speak(self) -> bool:
+        if self.dry_run or self.mode == "none":
+            return False
+        if not self._kokoro_available():
+            return False
+        if self.mode == "kokoro" or self.mode == "auto":
+            return self._playback_available()
+        return False
+
+    def _get_pipeline(self) -> Any | None:
+        if not self._kokoro_available():
+            return None
+        if self._pipeline is not None:
+            return self._pipeline
+        try:
+            from kokoro import KPipeline
+
+            self._pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
+        except Exception:
+            self._kokoro_ok = False
+            return None
+        return self._pipeline
+
+    def _synthesize(self, text: str) -> Any | None:
+        pipeline = self._get_pipeline()
+        if pipeline is None:
+            return None
+        try:
+            import numpy as np
+        except ImportError:
+            return None
+        chunks: list[Any] = []
+        try:
+            for _gs, _ps, audio in pipeline(text, voice=self.voice):
+                chunks.append(audio)
+        except Exception:
+            return None
+        if not chunks:
+            return None
+        return np.concatenate(chunks)
+
+    def _play_blocking(self, audio: Any) -> None:
+        try:
+            import sounddevice as sd
+
+            sd.play(audio, KOKORO_SAMPLE_RATE)
+            sd.wait()
+        except Exception:
+            self._play_ok = False
+
+    def announce(self, text: str) -> None:
+        print(text, flush=True)
+        if not self._should_speak():
+            return
+        audio = self._synthesize(text)
+        if audio is not None:
+            self._play_blocking(audio)
+
+    def announce_and_wait(self, text: str) -> None:
+        self.announce(text)
 
 
 def strip_accents(text: str) -> str:
@@ -90,11 +203,26 @@ def load_actions(path: Path) -> list[dict[str, Any]]:
 def find_action(
     command_text: str, entries: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
+    hit = find_action_with_phrase(command_text, entries)
+    return hit[0] if hit else None
+
+
+def find_action_with_phrase(
+    command_text: str, entries: list[dict[str, Any]]
+) -> tuple[dict[str, Any], str] | None:
     for entry in entries:
         for phrase in entry["phrases"]:
-            if phrase_matches(command_text, str(phrase)):
-                return entry
+            ps = str(phrase)
+            if phrase_matches(command_text, ps):
+                return entry, ps
     return None
+
+
+def confirmation_prompt(matched_phrase: str) -> str:
+    p = matched_phrase.strip()
+    if p:
+        p = p[0].upper() + p[1:]
+    return f"{p} ? Dites oui ou non."
 
 
 def _expand_env(value: str) -> str:
@@ -137,7 +265,8 @@ def execute_action(action: dict[str, Any], *, dry_run: bool) -> None:
         print(f"[launcher] execute open : {resolved!r}", flush=True)
     elif typ == "say":
         message = action.get("message", "")
-        print(f"[launcher] {message}", flush=True)
+        if dry_run:
+            print(f"[launcher] {message}", flush=True)
     else:
         print(f"[launcher] type d'action inconnu : {typ!r}", flush=True)
 
@@ -148,24 +277,49 @@ def handle_command(
     entries: list[dict[str, Any]],
     *,
     dry_run: bool,
-    confirm_timeout: float = 4.0,
+    confirm_timeout: float = DEFAULT_CONFIRM_TIMEOUT,
+    speaker: Speaker | None = None,
     send_confirm: Callable[[WorkerSession, float], str] | None = None,
     execute: Callable[[dict[str, Any], bool], None] | None = None,
+    prompt_confirm: Callable[[WorkerSession, Speaker, str, float], str] | None = None,
 ) -> None:
-    entry = find_action(command_text, entries)
-    if entry is None:
+    spk = speaker or Speaker(mode="none", dry_run=dry_run)
+    hit = find_action_with_phrase(command_text, entries)
+    if hit is None:
         print(f"[launcher] commande inconnue : {command_text!r}", flush=True)
         return
+    entry, matched_phrase = hit
     action = entry["action"]
     needs_confirm = bool(entry.get("confirm"))
     if needs_confirm:
-        _send = send_confirm or _default_send_confirm
-        answer = _send(session, confirm_timeout)
+        if prompt_confirm is not None:
+            answer = prompt_confirm(session, spk, matched_phrase, confirm_timeout)
+        elif send_confirm is not None:
+            spk.announce_and_wait(confirmation_prompt(matched_phrase))
+            answer = send_confirm(session, confirm_timeout)
+        else:
+            answer = _prompt_and_confirm(session, spk, matched_phrase, confirm_timeout)
         if answer != "yes":
-            print(f"[launcher] annule (reponse={answer})", flush=True)
+            spk.announce("Annule.")
             return
     runner = execute or (lambda a, dr: execute_action(a, dry_run=dr))
     runner(action, dry_run)
+    if dry_run:
+        return
+    if action.get("type") == "say":
+        spk.announce(str(action.get("message", "")))
+    else:
+        spk.announce("C'est fait.")
+
+
+def _prompt_and_confirm(
+    session: WorkerSession,
+    speaker: Speaker,
+    matched_phrase: str,
+    timeout: float,
+) -> str:
+    speaker.announce_and_wait(confirmation_prompt(matched_phrase))
+    return _default_send_confirm(session, timeout)
 
 
 def _default_send_confirm(session: WorkerSession, timeout: float) -> str:
@@ -206,6 +360,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="affiche l'action sans l'executer",
     )
+    p.add_argument(
+        "--tts",
+        choices=("auto", "kokoro", "none"),
+        default="auto",
+        help="synthese vocale : auto (kokoro si disponible), kokoro ou none",
+    )
+    p.add_argument(
+        "--tts-voice",
+        default="ff_siwis",
+        help="voix Kokoro (defaut : ff_siwis)",
+    )
+    p.add_argument(
+        "--confirm-timeout",
+        type=float,
+        default=DEFAULT_CONFIRM_TIMEOUT,
+        help="delai ecoute pour confirm en secondes (defaut : 6)",
+    )
     return p.parse_args(argv)
 
 
@@ -236,6 +407,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Echec a l'initialisation : {exc}", file=sys.stderr)
         session.shutdown()
         return 1
+
+    speaker = Speaker(
+        mode=args.tts,
+        voice=args.tts_voice,
+        dry_run=args.dry_run,
+    )
 
     print(
         "\nEntree : demarrer / arreter l'enregistrement - q + Entree : quitter\n",
@@ -271,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
                             text,
                             entries,
                             dry_run=args.dry_run,
+                            confirm_timeout=args.confirm_timeout,
+                            speaker=speaker,
                         )
     finally:
         return session.shutdown()

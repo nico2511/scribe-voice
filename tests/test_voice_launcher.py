@@ -44,6 +44,12 @@ def test_normalize_command_text(text: str, expected: str) -> None:
     assert vl.normalize_command_text(text) == expected
 
 
+def test_confirmation_prompt() -> None:
+    assert vl.confirmation_prompt("verrouille la session") == (
+        "Verrouille la session ? Dites oui ou non."
+    )
+
+
 def test_find_action_first_match() -> None:
     entries = [
         {"phrases": ["alpha"], "action": {"type": "say", "message": "a"}},
@@ -125,34 +131,37 @@ def test_confirm_path(answer: str, capsys: pytest.CaptureFixture[str]) -> None:
     entries = [
         {
             "phrases": ["lock"],
-            "action": {"type": "say", "message": "locked"},
+            "action": {"type": "run", "args": ["x"]},
             "confirm": True,
         }
     ]
     executed: list[bool] = []
 
     def fake_confirm(session: Any, timeout: float) -> str:
-        assert timeout == 4.0
+        assert timeout == vl.DEFAULT_CONFIRM_TIMEOUT
         return answer
 
     def fake_exec(action: dict[str, Any], dry_run: bool) -> None:
         executed.append(True)
 
+    spk = vl.Speaker(mode="none")
     vl.handle_command(
         MagicMock(),
         "lock",
         entries,
         dry_run=False,
+        speaker=spk,
         send_confirm=fake_confirm,
         execute=fake_exec,
     )
     out = capsys.readouterr().out
+    assert "Dites oui ou non." in out
     if answer == "yes":
         assert executed == [True]
-        assert "annule" not in out
+        assert "C'est fait." in out
     else:
         assert executed == []
-        assert f"annule (reponse={answer})" in out
+        assert "Annule." in out
 
 
 def test_run_never_uses_shell() -> None:
@@ -160,7 +169,7 @@ def test_run_never_uses_shell() -> None:
         {"phrases": ["x"], "action": {"type": "run", "args": ["cmd", "a"]}, "confirm": False}
     ]
     with patch.object(subprocess, "Popen") as popen:
-        vl.handle_command(MagicMock(), "x", entries, dry_run=False)
+        vl.handle_command(MagicMock(), "x", entries, dry_run=False, speaker=vl.Speaker(mode="none"))
         popen.assert_called_once_with(["cmd", "a"], shell=False)
 
 
@@ -183,11 +192,49 @@ class MockWorkerSession:
 
 
 @pytest.mark.parametrize("answer", ["yes", "no", "unknown"])
-def test_default_send_confirm(answer: str) -> None:
+def test_default_send_confirm_timeout(answer: str) -> None:
     s = MockWorkerSession(answer)
-    got = vl._default_send_confirm(s, 4.0)
+    got = vl._default_send_confirm(s, vl.DEFAULT_CONFIRM_TIMEOUT)
     assert got == answer
-    assert s.sent == [{"cmd": "confirm", "timeout": 4.0}]
+    assert s.sent == [{"cmd": "confirm", "timeout": vl.DEFAULT_CONFIRM_TIMEOUT}]
+
+
+def test_prompt_then_confirm_order() -> None:
+    timeline: list[str] = []
+    entries = [
+        {
+            "phrases": ["lock"],
+            "action": {"type": "run", "args": ["x"]},
+            "confirm": True,
+        }
+    ]
+
+    class TrackSpeaker:
+        def announce_and_wait(self, text: str) -> None:
+            timeline.append(f"prompt:{text}")
+            print(text, flush=True)
+
+        def announce(self, text: str) -> None:
+            timeline.append(f"announce:{text}")
+            print(text, flush=True)
+
+    def fake_confirm(session: Any, timeout: float) -> str:
+        timeline.append(f"confirm:{timeout}")
+        return "yes"
+
+    with patch.object(subprocess, "Popen"):
+        vl.handle_command(
+            MagicMock(),
+            "lock",
+            entries,
+            dry_run=False,
+            speaker=TrackSpeaker(),
+            send_confirm=fake_confirm,
+            confirm_timeout=6.0,
+        )
+    assert timeline[0].startswith("prompt:")
+    assert timeline[1] == "confirm:6.0"
+    assert timeline[-1] == "announce:C'est fait."
 
 
 def test_handle_command_with_default_send_confirm(capsys: pytest.CaptureFixture[str]) -> None:
@@ -196,6 +243,40 @@ def test_handle_command_with_default_send_confirm(capsys: pytest.CaptureFixture[
         {"phrases": ["y"], "action": {"type": "say", "message": "ok"}, "confirm": True}
     ]
     with patch.object(vl, "execute_action") as ea:
-        vl.handle_command(s, "y", entries, dry_run=False)
+        vl.handle_command(s, "y", entries, dry_run=False, speaker=vl.Speaker(mode="none"))
         ea.assert_not_called()
-    assert "annule (reponse=no)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Annule." in out
+    assert "Dites oui ou non." in out
+
+
+def test_speaker_kokoro_missing_fallback(capsys: pytest.CaptureFixture[str]) -> None:
+    sp = vl.Speaker(mode="auto")
+    with patch.object(sp, "_kokoro_available", return_value=False):
+        with patch.object(sp, "_synthesize") as syn:
+            sp.announce("Bonjour")
+            syn.assert_not_called()
+    assert "Bonjour" in capsys.readouterr().out
+
+
+def test_tts_none_skips_synthesis() -> None:
+    sp = vl.Speaker(mode="none")
+    with patch.object(sp, "_synthesize") as syn:
+        sp.announce("test")
+        syn.assert_not_called()
+    assert sp._should_speak() is False
+
+
+def test_say_action_announces_message(capsys: pytest.CaptureFixture[str]) -> None:
+    entries = [
+        {"phrases": ["hi"], "action": {"type": "say", "message": "Salut"}, "confirm": False}
+    ]
+    vl.handle_command(MagicMock(), "hi", entries, dry_run=False, speaker=vl.Speaker(mode="none"))
+    assert "Salut" in capsys.readouterr().out
+
+
+def test_parse_args_tts_and_confirm_timeout() -> None:
+    args = vl.parse_args(["--tts", "none", "--confirm-timeout", "8"])
+    assert args.tts == "none"
+    assert args.confirm_timeout == 8.0
+    assert args.tts_voice == "ff_siwis"

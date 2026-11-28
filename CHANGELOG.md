@@ -4,6 +4,8 @@
 
 - Lanceur vocal de démonstration : `examples/voice_launcher.py` et fichier d'actions
   `examples/launcher_actions.example.json` (actions `run`, `open`, `say`, confirmation optionnelle).
+- Synthèse vocale optionnelle Kokoro (`examples/requirements-launcher.txt`) : invitation à confirmer
+  à voix haute, délai `confirm` porté à 6 s par défaut, annonces de résultat (`C'est fait.`, `Annule.`).
 
 ## v1.2.0
 
