@@ -149,6 +149,49 @@ Hors ligne : laisser Hugging Face mettre le modèle en cache lors d'une premièr
 Kokoro est sous licence [Apache-2.0](https://github.com/hexgrad/kokoro) ; il n'est pas embarqué
 dans `voice_worker.exe` (voir `THIRD_PARTY_NOTICES.md` pour les composants du binaire).
 
+### Lanceur graphique (démo)
+
+`examples/voice_launcher_gui.py` est une petite interface Tkinter (un seul fichier) qui
+réutilise la logique de `voice_launcher.py`. Le moteur vocal **`voice_worker.exe` reste un
+exécutable séparé** : il n'est ni importé ni embarqué dans le lanceur graphique PyInstaller.
+Pour mettre à jour le moteur, **remplacez seulement `voice_worker.exe`** à côté du lanceur
+(ou au chemin indiqué par `--exe` / `SCRIBE_VOICE_WORKER`) — inutile de reconstruire le
+lanceur graphique.
+
+**Résolution du worker** (dans cet ordre) :
+
+1. `--exe` ;
+2. variable d'environnement `SCRIBE_VOICE_WORKER` ;
+3. `voice_worker.exe` dans le même dossier que le lanceur graphique (script ou exe gelé).
+
+Lancement depuis les sources :
+
+```powershell
+pip install -r requirements.txt
+pip install -r examples/requirements-launcher.txt
+python examples/voice_launcher_gui.py
+```
+
+**F8** démarre ou arrête l'enregistrement (raccourci **global** sous Windows via `RegisterHotKey`
+; ailleurs F8 seulement lorsque la fenêtre a le focus). La version et le numéro de **protocole**
+lus sur l'événement `ready` s'affichent dans la fenêtre et le journal. L'arrêt automatique après
+silence (`end_on_silence_ms`, défaut 700) n'est utilisé que si le protocole du worker est **≥ 5**
+; sinon un message l'indique et l'arrêt se fait manuellement avec F8. Un protocole plus récent
+ne bloque pas le lanceur : champs et événements inconnus sont ignorés.
+
+Dossier des modèles Whisper : `--models-dir` ou `SCRIBE_VOICE_MODELS_DIR`. Les autres options
+(`--actions`, `--offline`, `--tts`, etc.) ont les mêmes défauts que le lanceur console.
+
+Binaire fenêtré (sans console) — la commande n'est pas exécutée automatiquement en CI :
+
+```powershell
+pip install -r requirements-build.txt
+pip install -r examples/requirements-launcher.txt
+pyinstaller examples/voice_launcher_gui.spec
+```
+
+Sortie : `dist/voice_launcher_gui.exe` ; placez `voice_worker.exe` dans le même dossier.
+
 ### Essayer avec le client de démo
 
 À la racine du dépôt, après `pip install -r requirements.txt` :

@@ -2,6 +2,10 @@
 
 ## Non publié
 
+- Lanceur graphique de démonstration : `examples/voice_launcher_gui.py` (Tkinter),
+  raccourci F8 (global sous Windows), spec `examples/voice_launcher_gui.spec`.
+  Le worker reste un `voice_worker.exe` séparé (`--exe`, `SCRIBE_VOICE_WORKER`,
+  ou à côté du lanceur graphique).
 - Protocole **5** : champ optionnel `end_on_silence_ms` sur `start` et `confirm` pour arrêter
   l'écoute après un silence continu une fois la parole détectée (détection Silero ou RMS).
 - Lanceur : `--end-on-silence-ms` (défaut 700, `0` pour désactiver) transmis à `confirm`.
