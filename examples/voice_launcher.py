@@ -28,6 +28,10 @@ from demo_client import (  # noqa: E402
     worker_command,
 )
 
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from voice_keyword import classify_confirmation  # noqa: E402
+
 DEFAULT_ACTIONS = _EXAMPLES / "launcher_actions.example.json"
 DEFAULT_CONFIRM_TIMEOUT = 6.0
 KOKORO_LANG_CODE = "f"
@@ -157,8 +161,37 @@ def normalize_command_text(text: str) -> str:
     return t.strip()
 
 
+_FIRST_SENTENCE_BOUNDARY = re.compile(r"^(.+?)[.!?]\s", re.DOTALL)
+REPOSE_QUESTION = "Je repose la question."
+
+
+def split_command_text(text: str) -> tuple[str, str]:
+    """Decoupe au premier . ! ou ? suivi d'un espace ; sinon tout le texte."""
+    raw = text.strip()
+    if not raw:
+        return "", ""
+    m = _FIRST_SENTENCE_BOUNDARY.match(raw)
+    if m:
+        return m.group(1).strip(), raw[m.end() :].strip()
+    return raw, ""
+
+
+def command_text_for_matching(text: str) -> str:
+    first, _ = split_command_text(text)
+    return first
+
+
+def command_had_premature_answer(text: str) -> bool:
+    """Vrai si un oui/non a ete dit dans la meme prise, apres la premiere phrase."""
+    _first, rest = split_command_text(text)
+    if not rest:
+        return False
+    answer = classify_confirmation(rest)
+    return answer in ("yes", "no")
+
+
 def phrase_matches(command_text: str, phrase: str) -> bool:
-    norm_cmd = normalize_command_text(command_text)
+    norm_cmd = normalize_command_text(command_text_for_matching(command_text))
     norm_phrase = normalize_command_text(phrase)
     if not norm_phrase:
         return False
@@ -281,7 +314,7 @@ def handle_command(
     speaker: Speaker | None = None,
     send_confirm: Callable[[WorkerSession, float], str] | None = None,
     execute: Callable[[dict[str, Any], bool], None] | None = None,
-    prompt_confirm: Callable[[WorkerSession, Speaker, str, float], str] | None = None,
+    prompt_confirm: Callable[[WorkerSession, Speaker, str, float, str], str] | None = None,
 ) -> None:
     spk = speaker or Speaker(mode="none", dry_run=dry_run)
     hit = find_action_with_phrase(command_text, entries)
@@ -293,12 +326,22 @@ def handle_command(
     needs_confirm = bool(entry.get("confirm"))
     if needs_confirm:
         if prompt_confirm is not None:
-            answer = prompt_confirm(session, spk, matched_phrase, confirm_timeout)
+            answer = prompt_confirm(
+                session, spk, matched_phrase, confirm_timeout, command_text
+            )
         elif send_confirm is not None:
-            spk.announce_and_wait(confirmation_prompt(matched_phrase))
-            answer = send_confirm(session, confirm_timeout)
+            answer = _prompt_and_confirm(
+                session,
+                spk,
+                matched_phrase,
+                confirm_timeout,
+                command_text,
+                send_confirm=send_confirm,
+            )
         else:
-            answer = _prompt_and_confirm(session, spk, matched_phrase, confirm_timeout)
+            answer = _prompt_and_confirm(
+                session, spk, matched_phrase, confirm_timeout, command_text
+            )
         if answer != "yes":
             spk.announce("Annule.")
             return
@@ -317,9 +360,15 @@ def _prompt_and_confirm(
     speaker: Speaker,
     matched_phrase: str,
     timeout: float,
+    command_text: str,
+    *,
+    send_confirm: Callable[[WorkerSession, float], str] | None = None,
 ) -> str:
+    if command_had_premature_answer(command_text):
+        speaker.announce_and_wait(REPOSE_QUESTION)
     speaker.announce_and_wait(confirmation_prompt(matched_phrase))
-    return _default_send_confirm(session, timeout)
+    confirm = send_confirm or _default_send_confirm
+    return confirm(session, timeout)
 
 
 def _default_send_confirm(session: WorkerSession, timeout: float) -> str:

@@ -24,12 +24,40 @@ import voice_launcher as vl  # noqa: E402
         ("ouvre le bloc note", "ouvre le bloc note", True),
         ("OUVRE LE BLOC-NOTES", "ouvre le bloc-notes", True),
         ("ouvre le bloc note s il te plait", "ouvre le bloc note", True),
+        ("verrouille ma session. Oui.", "verrouille ma session", True),
+        ("verrouille ma session. non.", "verrouille ma session", True),
         ("ferme tout", "ouvre le bloc-notes", False),
         ("ouvre le bloc", "ouvre le bloc-notes", False),
     ],
 )
 def test_phrase_matches(command: str, phrase: str, expected: bool) -> None:
     assert vl.phrase_matches(command, phrase) is expected
+
+
+@pytest.mark.parametrize(
+    "text, first, rest",
+    [
+        ("verrouille ma session. Oui.", "verrouille ma session", "Oui."),
+        ("alpha", "alpha", ""),
+        ("un deux! trois", "un deux", "trois"),
+    ],
+)
+def test_split_command_text(text: str, first: str, rest: str) -> None:
+    assert vl.split_command_text(text) == (first, rest)
+
+
+def test_command_had_premature_answer() -> None:
+    assert vl.command_had_premature_answer("verrouille ma session. Oui.")
+    assert vl.command_had_premature_answer("verrouille ma session. non merci")
+    assert not vl.command_had_premature_answer("verrouille ma session")
+
+
+def test_example_actions_match_verrouille_ma_session() -> None:
+    entries = vl.load_actions(EXAMPLES / "launcher_actions.example.json")
+    hit = vl.find_action_with_phrase("verrouille ma session. Oui.", entries)
+    assert hit is not None
+    assert hit[1] == "verrouille ma session"
+    assert hit[0].get("confirm") is True
 
 
 @pytest.mark.parametrize(
@@ -197,6 +225,38 @@ def test_default_send_confirm_timeout(answer: str) -> None:
     got = vl._default_send_confirm(s, vl.DEFAULT_CONFIRM_TIMEOUT)
     assert got == answer
     assert s.sent == [{"cmd": "confirm", "timeout": vl.DEFAULT_CONFIRM_TIMEOUT}]
+
+
+def test_premature_oui_reposes_question_not_auto_confirm(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    entries = [
+        {
+            "phrases": ["verrouille ma session"],
+            "action": {"type": "run", "args": ["x"]},
+            "confirm": True,
+        }
+    ]
+    confirm_calls: list[float] = []
+
+    def fake_confirm(_session: Any, timeout: float) -> str:
+        confirm_calls.append(timeout)
+        return "no"
+
+    with patch.object(subprocess, "Popen"):
+        vl.handle_command(
+            MagicMock(),
+            "verrouille ma session. Oui.",
+            entries,
+            dry_run=False,
+            speaker=vl.Speaker(mode="none"),
+            send_confirm=fake_confirm,
+        )
+    out = capsys.readouterr().out
+    assert confirm_calls == [vl.DEFAULT_CONFIRM_TIMEOUT]
+    assert vl.REPOSE_QUESTION in out
+    assert "Dites oui ou non." in out
+    assert "Annule." in out
 
 
 def test_prompt_then_confirm_order() -> None:

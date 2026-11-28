@@ -1,11 +1,21 @@
 [
   {
-    "phrases": ["ouvre le bloc-notes", "ouvre le bloc note"],
+    "phrases": [
+      "ouvre le bloc-notes",
+      "ouvre le bloc note",
+      "ouvre mon bloc-notes",
+      "ouvre mon bloc note"
+    ],
     "action": {"type": "run", "args": ["notepad.exe"]},
     "confirm": false
   },
   {
-    "phrases": ["lance la calculatrice", "ouvre la calculatrice"],
+    "phrases": [
+      "lance la calculatrice",
+      "ouvre la calculatrice",
+      "lance ma calculatrice",
+      "ouvre ma calculatrice"
+    ],
     "action": {"type": "run", "args": ["calc.exe"]},
     "confirm": false
   },
@@ -20,7 +30,13 @@
     "confirm": false
   },
   {
-    "phrases": ["verrouille la session", "verrouiller l ecran"],
+    "phrases": [
+      "verrouille la session",
+      "verrouille ma session",
+      "verrouiller l ecran",
+      "verrouille l ordinateur",
+      "verrouille le pc"
+    ],
     "action": {"type": "run", "args": ["rundll32.exe", "user32.dll,LockWorkStation"]},
     "confirm": true
   },
