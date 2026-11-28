@@ -53,7 +53,7 @@ def _run_demo_cycle(tmp_path: Path, transcript: str) -> str:
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
         blob = "".join(collected)
-        if "[model] chargé" in blob:
+        if "[model] charge" in blob:
             break
         time.sleep(0.05)
     else:
@@ -68,7 +68,7 @@ def _run_demo_cycle(tmp_path: Path, transcript: str) -> str:
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
         blob = "".join(collected)
-        if "→ commande" in blob:
+        if "-> commande" in blob:
             break
         time.sleep(0.05)
     else:
@@ -89,5 +89,5 @@ def _run_demo_cycle(tmp_path: Path, transcript: str) -> str:
 def test_demo_client_majordome_command(tmp_path):
     out = _run_demo_cycle(tmp_path, "Majordome ouvre la note.")
     assert "Majordome ouvre la note." in out
-    assert "→ commande (Majordome)" in out
+    assert "-> commande (Majordome)" in out
     assert "ouvre la note." in out
