@@ -4,7 +4,7 @@ Worker de dictée vocale **local** : reconnaissance vocale avec
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper), piloté par une application
 cliente via un protocole **JSON Lines** sur stdin/stdout.
 
-Version du worker : **1.1.1** ; version du protocole : **4**.
+Version du worker : **1.2.0** ; version du protocole : **4**.
 
 ## À quoi ça sert
 
@@ -144,8 +144,11 @@ send({"cmd": "init", "config": {
 - Fichier `~/Documents/scribe-voice/voice_worker.log`, ou
   `~/Documents/scribe-voice/<app_id>/voice_worker.log` après un `init` avec `app_id`.
 - stdout est réservé au protocole.
-- Par défaut, le texte transcrit n'est pas écrit dans le journal. Pour l'inclure, lancer le
-  worker avec la variable d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`).
+- Par défaut, le texte transcrit n'est pas écrit dans le journal. Pour l'inclure, activer
+  `log_transcripts` à `true` dans `config`, ou lancer le worker avec la variable
+  d'environnement `SCRIBE_VOICE_LOG_TRANSCRIPTS=1` (ou `true`, `yes`, `on`). Priorité : la
+  variable d'environnement force l'activation si elle vaut vrai ; sinon `log_transcripts`
+  dans la config ; défaut désactivé.
 
 ## Protocole (résumé)
 
@@ -161,8 +164,8 @@ versions dans [CHANGELOG.md](CHANGELOG.md).
 Windows x64, CPython **3.11** (la CI de release utilise 3.11.9) :
 
 ```powershell
-.\build.ps1 -Version v1.1.1
-# -> release\voice_worker.exe, release\scribe-voice-v1.1.1-win-x64.zip, release\SHA256SUMS
+.\build.ps1 -Version v1.2.0
+# -> release\voice_worker.exe, release\scribe-voice-v1.2.0-win-x64.zip, release\SHA256SUMS
 ```
 
 `build.ps1` installe `requirements-build.txt`, lance PyInstaller avec `voice_worker.spec`, puis

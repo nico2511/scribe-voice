@@ -1,4 +1,4 @@
-# Dépendances d'exécution FIGÉES de scribe-voice v1.0.
+# Dépendances d'exécution FIGÉES de scribe-voice.
 #
 # Versions relevées dans un voice_worker.exe de référence (build du 2026-09-29, Python 3.11.9,
 # SHA-256 36f27355c1d42ee7398a9f8654953baace31569b42c569fe805882cb923c008a),
