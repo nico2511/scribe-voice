@@ -78,6 +78,7 @@ from voice_keyword import (
     KeywordConfig,
     classify_confirmation,
     is_keyword_only,
+    normalize_token,
     transcript_command_payload,
 )
 
@@ -461,6 +462,8 @@ def sanitize_config(data: dict[str, Any] | None) -> dict[str, Any]:
                 if s:
                     aliases.append(s[:120])
         cfg["keyword_aliases"] = aliases[:32]
+    elif normalize_token(cfg["keyword"]) != normalize_token(DEFAULT_KEYWORD):
+        cfg["keyword_aliases"] = []
     explicit_dir = data.get("models_dir") if isinstance(data, dict) else None
     if explicit_dir is not None and str(explicit_dir).strip():
         cfg["models_dir"] = _normalize_models_dir(explicit_dir)

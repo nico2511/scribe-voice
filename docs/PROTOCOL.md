@@ -245,10 +245,15 @@ worker émet `confirmation` avec `answer:"unknown"` et `text:""`.
   par de la ponctuation, `transcript.text` est vide.
 - Chaque passe Whisper reçoit `initial_prompt="{keyword}."` (par exemple `Majordome.`). Les alias ne
   servent qu'à la détection de `command` et au filtre « mot-clé seul », pas au prompt.
+- Les alias par défaut (`Major d'homme`, `Major dome`, `Majordom`, `Majordomes`) ne s'appliquent
+  que si `keyword` est absent ou vaut le mot-clé par défaut `Majordome` (comparaison après
+  normalisation casse/accents) **et** que `keyword_aliases` n'est pas fourni dans la config.
+  Un `keyword` personnalisé sans `keyword_aliases` donne une liste vide (les alias Majordome ne
+  sont pas réutilisés).
 - Si `keyword_aliases` est présent dans la config (y compris la liste vide `[]`), il remplace
-  entièrement la liste par défaut. Les variantes couvertes par la normalisation (casse, accents,
-  espaces et ponctuation en tête) n'ont pas besoin d'être listées : par exemple `Majordôme` est
-  reconnu sans alias.
+  entièrement la liste (y compris les alias par défaut). Les variantes couvertes par la
+  normalisation (casse, accents, espaces et ponctuation en tête) n'ont pas besoin d'être listées :
+  par exemple `Majordôme` est reconnu sans alias lorsque le mot-clé effectif est `Majordome`.
 
 ## Traitement de l'audio d'une dictée
 

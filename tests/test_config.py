@@ -65,6 +65,32 @@ def test_keyword_aliases_in_config_replaces_default():
     assert empty["keyword_aliases"] == []
 
 
+def test_custom_keyword_without_aliases_drops_majordome_defaults():
+    cfg = vw.sanitize_config({"keyword": "Jarvis"})
+    assert cfg["keyword"] == "Jarvis"
+    assert cfg["keyword_aliases"] == []
+
+
+def test_default_aliases_only_with_default_keyword():
+    import voice_keyword as vk
+
+    assert vw.sanitize_config({})["keyword_aliases"] == list(
+        vw.DEFAULT_CONFIG["keyword_aliases"]
+    )
+    assert vw.sanitize_config({"keyword": "Majordome"})["keyword_aliases"] == list(
+        vw.DEFAULT_CONFIG["keyword_aliases"]
+    )
+    assert vw.sanitize_config({"keyword": "MAJORDÔME"})["keyword_aliases"] == list(
+        vw.DEFAULT_CONFIG["keyword_aliases"]
+    )
+    jarvis = vk.KeywordConfig.from_config(vw.sanitize_config({"keyword": "Jarvis"}))
+    assert jarvis.parse_command("Major d'homme, ouvre.") is None
+    assert jarvis.parse_command("Jarvis, ouvre.") == {
+        "keyword": "Jarvis",
+        "text": "ouvre.",
+    }
+
+
 def test_invalid_values_fall_back():
     cfg = vw.sanitize_config({
         "language": "klingon", "model_size": "huge", "device": "tpu",
