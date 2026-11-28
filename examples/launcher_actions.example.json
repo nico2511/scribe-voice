@@ -1,0 +1,32 @@
+[
+  {
+    "phrases": ["ouvre le bloc-notes", "ouvre le bloc note"],
+    "action": {"type": "run", "args": ["notepad.exe"]},
+    "confirm": false
+  },
+  {
+    "phrases": ["lance la calculatrice", "ouvre la calculatrice"],
+    "action": {"type": "run", "args": ["calc.exe"]},
+    "confirm": false
+  },
+  {
+    "phrases": ["ouvre mes documents", "ouvre le dossier documents"],
+    "action": {"type": "open", "target": "%USERPROFILE%\\Documents"},
+    "confirm": false
+  },
+  {
+    "phrases": ["ouvre le site", "ouvre le site web"],
+    "action": {"type": "open", "target": "https://example.com"},
+    "confirm": false
+  },
+  {
+    "phrases": ["verrouille la session", "verrouiller l ecran"],
+    "action": {"type": "run", "args": ["rundll32.exe", "user32.dll,LockWorkStation"]},
+    "confirm": true
+  },
+  {
+    "phrases": ["dis bonjour"],
+    "action": {"type": "say", "message": "Bonjour depuis le lanceur vocal."},
+    "confirm": false
+  }
+]

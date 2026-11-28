@@ -1,5 +1,10 @@
 # Changelog
 
+## Non publié
+
+- Lanceur vocal de démonstration : `examples/voice_launcher.py` et fichier d'actions
+  `examples/launcher_actions.example.json` (actions `run`, `open`, `say`, confirmation optionnelle).
+
 ## v1.2.0
 
 Version du worker **1.2.0**. Le protocole **4** ne change pas.

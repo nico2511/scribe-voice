@@ -105,6 +105,23 @@ send({"cmd": "confirm", "timeout": 4})
 Le worker n'exécute aucune action : il renvoie le texte et la classification, et c'est
 l'application cliente qui décide quoi faire.
 
+### Lanceur vocal (démo)
+
+`examples/voice_launcher.py` pilote le worker comme le client de démo, mais exécute
+des actions lorsqu'un événement `transcript` contient un champ `command`. Les actions
+sont déclarées dans un fichier JSON (par défaut `examples/launcher_actions.example.json`).
+
+```bash
+python examples/voice_launcher.py
+python examples/voice_launcher.py --actions chemin/vers/actions.json --dry-run
+```
+
+Chaque entrée du fichier JSON contient :
+
+- `phrases` : liste de formulations reconnues (comparaison sur `command.text`, normalisée) ;
+- `action` : `run` (`args` en liste, sans shell), `open` (`target` URL ou chemin), ou `say` (`message`) ;
+- `confirm` : si `true`, le lanceur demande une confirmation vocale (`confirm` / oui-non) avant d'agir.
+
 ### Essayer avec le client de démo
 
 À la racine du dépôt, après `pip install -r requirements.txt` :
