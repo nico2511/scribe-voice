@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import unicodedata
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -33,10 +37,85 @@ if str(ROOT) not in sys.path:
 from voice_keyword import classify_confirmation  # noqa: E402
 
 DEFAULT_ACTIONS = _EXAMPLES / "launcher_actions.example.json"
-DEFAULT_CONFIRM_TIMEOUT = 6.0
+DEFAULT_CONFIRM_TIMEOUT = 3.5
+LAUNCHER_READY = "Lanceur pret"
 KOKORO_LANG_CODE = "f"
 KOKORO_MODEL_ID = "hexgrad/Kokoro-82M"
 KOKORO_SAMPLE_RATE = 24_000
+
+
+def _hf_hub_cache_roots() -> list[Path]:
+    roots: list[Path] = []
+    if hf_home := os.environ.get("HF_HOME"):
+        roots.append(Path(hf_home) / "hub")
+    if hub_cache := os.environ.get("HUGGINGFACE_HUB_CACHE"):
+        roots.append(Path(hub_cache))
+    roots.append(Path.home() / ".cache" / "huggingface" / "hub")
+    return roots
+
+
+def kokoro_model_cached() -> bool:
+    for base in _hf_hub_cache_roots():
+        repo = base / "models--hexgrad--Kokoro-82M"
+        if not repo.is_dir():
+            continue
+        snapshots = repo / "snapshots"
+        if snapshots.is_dir() and any(snapshots.iterdir()):
+            return True
+    return False
+
+
+def apply_kokoro_hf_offline_if_cached(*, tts_online: bool) -> bool:
+    """Pose HF_HUB_OFFLINE=1 si le modele est deja en cache et --tts-online absent."""
+    if tts_online or not kokoro_model_cached():
+        return False
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    return True
+
+
+def apply_tts_warning_filters() -> None:
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+    logging.getLogger("kokoro").setLevel(logging.WARNING)
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*dropout.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*weight_norm.*",
+        category=FutureWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*unauthenticated.*",
+        category=UserWarning,
+        module=r"huggingface_hub.*",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*repo_id.*",
+        category=UserWarning,
+    )
+
+
+def resolve_worker_exe_path(exe: Path) -> Path:
+    p = Path(exe)
+    if not p.is_absolute():
+        p = (Path.cwd() / p).resolve()
+    else:
+        p = p.resolve()
+    return p
+
+
+def launcher_worker_command(args: argparse.Namespace) -> list[str]:
+    if args.exe:
+        resolved = resolve_worker_exe_path(Path(args.exe))
+        if not resolved.is_file():
+            print(f"Worker introuvable : {resolved}", file=sys.stderr)
+            sys.exit(2)
+        return [str(resolved)]
+    return worker_command(args)
 
 
 class Speaker:
@@ -48,13 +127,17 @@ class Speaker:
         voice: str = "ff_siwis",
         *,
         dry_run: bool = False,
+        tts_online: bool = False,
     ) -> None:
         self.mode = mode
         self.voice = voice
         self.dry_run = dry_run
+        self.tts_online = tts_online
         self._pipeline: Any = None
         self._kokoro_ok: bool | None = None
         self._play_ok: bool | None = None
+        self._preload_thread: threading.Thread | None = None
+        self._preload_ok = True
 
     def _kokoro_available(self) -> bool:
         if self.mode == "none":
@@ -103,11 +186,65 @@ class Speaker:
         try:
             from kokoro import KPipeline
 
-            self._pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
+            apply_tts_warning_filters()
+            self._pipeline = KPipeline(
+                lang_code=KOKORO_LANG_CODE,
+                repo_id=KOKORO_MODEL_ID,
+            )
         except Exception:
             self._kokoro_ok = False
             return None
         return self._pipeline
+
+    def wants_preload(self) -> bool:
+        if self.dry_run or self.mode == "none":
+            return False
+        if self.mode == "kokoro":
+            return self._kokoro_available() and self._playback_available()
+        return self._kokoro_available() and self._playback_available()
+
+    def _warm_voice(self) -> None:
+        pipeline = self._pipeline
+        if pipeline is None:
+            return
+        try:
+            for _ in pipeline(".", voice=self.voice):
+                break
+        except Exception:
+            self._kokoro_ok = False
+
+    def _load_pipeline_and_warm_voice(self) -> bool:
+        apply_kokoro_hf_offline_if_cached(tts_online=self.tts_online)
+        pipeline = self._get_pipeline()
+        if pipeline is None:
+            return False
+        self._warm_voice()
+        return self._pipeline is not None
+
+    def _preload_worker(self) -> None:
+        try:
+            if not self._load_pipeline_and_warm_voice():
+                self._preload_ok = False
+        except Exception:
+            self._preload_ok = False
+
+    def start_preload_background(self) -> None:
+        if not self.wants_preload():
+            return
+        self._preload_thread = threading.Thread(
+            target=self._preload_worker,
+            name="kokoro-preload",
+            daemon=True,
+        )
+        self._preload_thread.start()
+
+    def wait_preload(self, timeout: float = 300.0) -> bool:
+        if self._preload_thread is None:
+            return True
+        self._preload_thread.join(timeout=timeout)
+        if self._preload_thread.is_alive():
+            return False
+        return self._preload_ok
 
     def _synthesize(self, text: str) -> Any | None:
         pipeline = self._get_pipeline()
@@ -315,6 +452,7 @@ def handle_command(
     send_confirm: Callable[[WorkerSession, float], str] | None = None,
     execute: Callable[[dict[str, Any], bool], None] | None = None,
     prompt_confirm: Callable[[WorkerSession, Speaker, str, float, str], str] | None = None,
+    verbose: bool = False,
 ) -> None:
     spk = speaker or Speaker(mode="none", dry_run=dry_run)
     hit = find_action_with_phrase(command_text, entries)
@@ -337,10 +475,16 @@ def handle_command(
                 confirm_timeout,
                 command_text,
                 send_confirm=send_confirm,
+                verbose=verbose,
             )
         else:
             answer = _prompt_and_confirm(
-                session, spk, matched_phrase, confirm_timeout, command_text
+                session,
+                spk,
+                matched_phrase,
+                confirm_timeout,
+                command_text,
+                verbose=verbose,
             )
         if answer != "yes":
             spk.announce("Annule.")
@@ -363,20 +507,40 @@ def _prompt_and_confirm(
     command_text: str,
     *,
     send_confirm: Callable[[WorkerSession, float], str] | None = None,
+    verbose: bool = False,
 ) -> str:
     if command_had_premature_answer(command_text):
         speaker.announce_and_wait(REPOSE_QUESTION)
     speaker.announce_and_wait(confirmation_prompt(matched_phrase))
-    confirm = send_confirm or _default_send_confirm
-    return confirm(session, timeout)
+    question_finished_at = time.monotonic()
+    if send_confirm is not None:
+        return send_confirm(session, timeout)
+    return _default_send_confirm(
+        session,
+        timeout,
+        verbose=verbose,
+        question_finished_at=question_finished_at,
+    )
 
 
-def _default_send_confirm(session: WorkerSession, timeout: float) -> str:
+def _default_send_confirm(
+    session: WorkerSession,
+    timeout: float,
+    *,
+    verbose: bool = False,
+    question_finished_at: float | None = None,
+) -> str:
     session.send({"cmd": "confirm", "timeout": timeout})
     evt = session.wait_for(
         lambda e: e.get("type") == "confirmation",
         timeout=max(30.0, timeout + 10.0),
     )
+    if verbose and question_finished_at is not None:
+        elapsed = time.monotonic() - question_finished_at
+        print(
+            f"[launcher] delai question -> confirmation : {elapsed:.2f} s",
+            flush=True,
+        )
     answer = evt.get("answer", "unknown")
     return str(answer) if answer is not None else "unknown"
 
@@ -424,7 +588,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--confirm-timeout",
         type=float,
         default=DEFAULT_CONFIRM_TIMEOUT,
-        help="delai ecoute pour confirm en secondes (defaut : 6)",
+        help="delai ecoute pour confirm en secondes (defaut : 3.5)",
+    )
+    p.add_argument(
+        "--tts-online",
+        action="store_true",
+        help="autoriser le telechargement Hugging Face du modele Kokoro",
+    )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="affiche le delai entre la question de confirmation et la reponse worker",
     )
     return p.parse_args(argv)
 
@@ -438,7 +612,16 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    cmd = worker_command(args)
+    speaker = Speaker(
+        mode=args.tts,
+        voice=args.tts_voice,
+        dry_run=args.dry_run,
+        tts_online=args.tts_online,
+    )
+    if not args.dry_run:
+        speaker.start_preload_background()
+
+    cmd = launcher_worker_command(args)
     env = os.environ.copy()
     proc = subprocess.Popen(
         cmd,
@@ -450,18 +633,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     session = WorkerSession(proc)
     session.send({"cmd": "init", "config": build_config(args)})
+    worker_ok = True
     try:
         session.wait_ready_and_model()
     except (TimeoutError, RuntimeError) as exc:
         print(f"Echec a l'initialisation : {exc}", file=sys.stderr)
+        worker_ok = False
+
+    tts_ok = speaker.wait_preload() if not args.dry_run else True
+
+    if not worker_ok:
         session.shutdown()
         return 1
+    if not tts_ok and speaker.wants_preload():
+        print(
+            "[launcher] avertissement : synthese vocale non prechargee",
+            file=sys.stderr,
+        )
 
-    speaker = Speaker(
-        mode=args.tts,
-        voice=args.tts_voice,
-        dry_run=args.dry_run,
-    )
+    speaker.announce(LAUNCHER_READY)
 
     print(
         "\nEntree : demarrer / arreter l'enregistrement - q + Entree : quitter\n",
@@ -499,6 +689,7 @@ def main(argv: list[str] | None = None) -> int:
                             dry_run=args.dry_run,
                             confirm_timeout=args.confirm_timeout,
                             speaker=speaker,
+                            verbose=args.verbose,
                         )
     finally:
         return session.shutdown()

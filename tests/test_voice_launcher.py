@@ -1,9 +1,12 @@
 """Lanceur vocal : normalisation, correspondance, actions et confirmation."""
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -340,3 +343,82 @@ def test_parse_args_tts_and_confirm_timeout() -> None:
     assert args.tts == "none"
     assert args.confirm_timeout == 8.0
     assert args.tts_voice == "ff_siwis"
+
+
+def test_parse_args_default_confirm_timeout() -> None:
+    args = vl.parse_args([])
+    assert args.confirm_timeout == 3.5
+
+
+def test_hf_hub_offline_when_cache_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snap = (
+        tmp_path
+        / "hub"
+        / "models--hexgrad--Kokoro-82M"
+        / "snapshots"
+        / "rev1"
+    )
+    snap.mkdir(parents=True)
+    (snap / "model.bin").write_bytes(b"1")
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    assert vl.kokoro_model_cached()
+    assert vl.apply_kokoro_hf_offline_if_cached(tts_online=False) is True
+    assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    assert vl.apply_kokoro_hf_offline_if_cached(tts_online=True) is False
+    assert os.environ.get("HF_HUB_OFFLINE") is None
+
+
+def test_apply_tts_warning_filters() -> None:
+    vl.apply_tts_warning_filters()
+
+
+def test_resolve_worker_exe_relative(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    exe = tmp_path / "voice_worker.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(exe=Path("voice_worker.exe"))
+    assert vl.launcher_worker_command(args) == [str(exe.resolve())]
+
+
+def test_preload_runs_in_background_thread() -> None:
+    ran = threading.Event()
+
+    class PreloadSpeaker(vl.Speaker):
+        def wants_preload(self) -> bool:
+            return True
+
+        def _preload_worker(self) -> None:
+            ran.set()
+
+    sp = PreloadSpeaker(mode="auto")
+    sp.start_preload_background()
+    assert sp._preload_thread is not None
+    assert sp._preload_thread.is_alive() or ran.wait(2.0)
+    sp.wait_preload(timeout=2.0)
+    assert ran.is_set()
+
+
+def test_verbose_confirm_delay(capsys: pytest.CaptureFixture[str]) -> None:
+    s = MockWorkerSession("no")
+
+    class WaitSpeaker(vl.Speaker):
+        def announce_and_wait(self, text: str) -> None:
+            print(text, flush=True)
+
+    entries = [
+        {"phrases": ["x"], "action": {"type": "say", "message": "m"}, "confirm": True}
+    ]
+    vl.handle_command(
+        s,
+        "x",
+        entries,
+        dry_run=False,
+        speaker=WaitSpeaker(mode="none"),
+        verbose=True,
+    )
+    out = capsys.readouterr().out
+    assert "delai question -> confirmation" in out
