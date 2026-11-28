@@ -1,0 +1,5 @@
+# Dépendances optionnelles pour la synthèse vocale du lanceur (examples/voice_launcher.py).
+# Non requis pour le worker ni pour les tests pytest du dépôt.
+kokoro==0.9.4
+soundfile==0.13.1
+sounddevice==0.5.3

@@ -1,5 +1,16 @@
 # Changelog
 
+## Non publié
+
+- Lanceur vocal de démonstration : `examples/voice_launcher.py` et fichier d'actions
+  `examples/launcher_actions.example.json` (actions `run`, `open`, `say`, confirmation optionnelle).
+- Synthèse vocale optionnelle Kokoro (`examples/requirements-launcher.txt`) : invitation à confirmer
+  à voix haute, délai `confirm` porté à 6 s par défaut, annonces de résultat (`C'est fait.`, `Annule.`).
+- Correspondance sur la première phrase de `command.text` ; oui/non dans la même prise ignorés pour
+  la confirmation (repose de la question si besoin).
+- Kokoro préchargé au démarrage (`repo_id` explicite), cache HF hors ligne par défaut,
+  `--confirm-timeout` 3,5 s, `--exe` relatif résolu depuis le cwd, `--verbose` pour le délai confirm.
+
 ## v1.2.0
 
 Version du worker **1.2.0**. Le protocole **4** ne change pas.
