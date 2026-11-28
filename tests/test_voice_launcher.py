@@ -168,7 +168,7 @@ def test_confirm_path(answer: str, capsys: pytest.CaptureFixture[str]) -> None:
     ]
     executed: list[bool] = []
 
-    def fake_confirm(session: Any, timeout: float) -> str:
+    def fake_confirm(session: Any, timeout: float, _end_ms: int | None = None) -> str:
         assert timeout == vl.DEFAULT_CONFIRM_TIMEOUT
         return answer
 
@@ -227,7 +227,13 @@ def test_default_send_confirm_timeout(answer: str) -> None:
     s = MockWorkerSession(answer)
     got = vl._default_send_confirm(s, vl.DEFAULT_CONFIRM_TIMEOUT)
     assert got == answer
-    assert s.sent == [{"cmd": "confirm", "timeout": vl.DEFAULT_CONFIRM_TIMEOUT}]
+    assert s.sent == [
+        {
+            "cmd": "confirm",
+            "timeout": vl.DEFAULT_CONFIRM_TIMEOUT,
+            "end_on_silence_ms": vl.DEFAULT_END_ON_SILENCE_MS,
+        }
+    ]
 
 
 def test_premature_oui_reposes_question_not_auto_confirm(
@@ -242,7 +248,7 @@ def test_premature_oui_reposes_question_not_auto_confirm(
     ]
     confirm_calls: list[float] = []
 
-    def fake_confirm(_session: Any, timeout: float) -> str:
+    def fake_confirm(_session: Any, timeout: float, _end_ms: int | None = None) -> str:
         confirm_calls.append(timeout)
         return "no"
 
@@ -281,7 +287,7 @@ def test_prompt_then_confirm_order() -> None:
             timeline.append(f"announce:{text}")
             print(text, flush=True)
 
-    def fake_confirm(session: Any, timeout: float) -> str:
+    def fake_confirm(session: Any, timeout: float, _end_ms: int | None = None) -> str:
         timeline.append(f"confirm:{timeout}")
         return "yes"
 

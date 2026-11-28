@@ -38,6 +38,7 @@ from voice_keyword import classify_confirmation  # noqa: E402
 
 DEFAULT_ACTIONS = _EXAMPLES / "launcher_actions.example.json"
 DEFAULT_CONFIRM_TIMEOUT = 3.5
+DEFAULT_END_ON_SILENCE_MS = 700
 LAUNCHER_READY = "Lanceur pret"
 KOKORO_LANG_CODE = "f"
 KOKORO_MODEL_ID = "hexgrad/Kokoro-82M"
@@ -448,8 +449,9 @@ def handle_command(
     *,
     dry_run: bool,
     confirm_timeout: float = DEFAULT_CONFIRM_TIMEOUT,
+    end_on_silence_ms: int | None = DEFAULT_END_ON_SILENCE_MS,
     speaker: Speaker | None = None,
-    send_confirm: Callable[[WorkerSession, float], str] | None = None,
+    send_confirm: Callable[[WorkerSession, float, int | None], str] | None = None,
     execute: Callable[[dict[str, Any], bool], None] | None = None,
     prompt_confirm: Callable[[WorkerSession, Speaker, str, float, str], str] | None = None,
     verbose: bool = False,
@@ -475,6 +477,7 @@ def handle_command(
                 confirm_timeout,
                 command_text,
                 send_confirm=send_confirm,
+                end_on_silence_ms=end_on_silence_ms,
                 verbose=verbose,
             )
         else:
@@ -484,6 +487,7 @@ def handle_command(
                 matched_phrase,
                 confirm_timeout,
                 command_text,
+                end_on_silence_ms=end_on_silence_ms,
                 verbose=verbose,
             )
         if answer != "yes":
@@ -506,7 +510,8 @@ def _prompt_and_confirm(
     timeout: float,
     command_text: str,
     *,
-    send_confirm: Callable[[WorkerSession, float], str] | None = None,
+    send_confirm: Callable[[WorkerSession, float, int | None], str] | None = None,
+    end_on_silence_ms: int | None = DEFAULT_END_ON_SILENCE_MS,
     verbose: bool = False,
 ) -> str:
     if command_had_premature_answer(command_text):
@@ -514,10 +519,11 @@ def _prompt_and_confirm(
     speaker.announce_and_wait(confirmation_prompt(matched_phrase))
     question_finished_at = time.monotonic()
     if send_confirm is not None:
-        return send_confirm(session, timeout)
+        return send_confirm(session, timeout, end_on_silence_ms)
     return _default_send_confirm(
         session,
         timeout,
+        end_on_silence_ms=end_on_silence_ms,
         verbose=verbose,
         question_finished_at=question_finished_at,
     )
@@ -527,10 +533,14 @@ def _default_send_confirm(
     session: WorkerSession,
     timeout: float,
     *,
+    end_on_silence_ms: int | None = DEFAULT_END_ON_SILENCE_MS,
     verbose: bool = False,
     question_finished_at: float | None = None,
 ) -> str:
-    session.send({"cmd": "confirm", "timeout": timeout})
+    payload: dict[str, Any] = {"cmd": "confirm", "timeout": timeout}
+    if end_on_silence_ms is not None:
+        payload["end_on_silence_ms"] = end_on_silence_ms
+    session.send(payload)
     evt = session.wait_for(
         lambda e: e.get("type") == "confirmation",
         timeout=max(30.0, timeout + 10.0),
@@ -589,6 +599,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=DEFAULT_CONFIRM_TIMEOUT,
         help="delai ecoute pour confirm en secondes (defaut : 3.5)",
+    )
+    p.add_argument(
+        "--end-on-silence-ms",
+        type=int,
+        default=DEFAULT_END_ON_SILENCE_MS,
+        help="arret auto apres silence pour confirm (defaut : 700, 0 pour desactiver)",
     )
     p.add_argument(
         "--tts-online",
@@ -682,12 +698,14 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(cmd_obj, dict):
                     text = str(cmd_obj.get("text", ""))
                     if text.strip():
+                        end_ms = args.end_on_silence_ms or None
                         handle_command(
                             session,
                             text,
                             entries,
                             dry_run=args.dry_run,
                             confirm_timeout=args.confirm_timeout,
+                            end_on_silence_ms=end_ms,
                             speaker=speaker,
                             verbose=args.verbose,
                         )

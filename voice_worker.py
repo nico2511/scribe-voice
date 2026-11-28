@@ -71,6 +71,7 @@ def _install_pyav_import_stub() -> None:
 
 _install_pyav_import_stub()
 
+from voice_silence import EndOnSilenceTracker, parse_end_on_silence_ms
 from voice_keyword import (
     COMMAND_PROMPT,
     DEFAULT_KEYWORD,
@@ -83,7 +84,7 @@ from voice_keyword import (
 )
 
 WORKER_VERSION = "1.2.0"
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DOWNLOAD_ROOT = os.path.join(
@@ -565,12 +566,20 @@ class AudioRecorder:
         self.rate = 16000
         self.chunk = 1024
         self._lock = threading.Lock()
+        self._on_chunk = None
+        self._on_silence_stop = None
 
-    def start(self) -> bool:
+    def start(
+        self,
+        on_chunk=None,
+        on_silence_stop=None,
+    ) -> bool:
         if self.is_recording:
             return True
         with self._lock:
             self.frames = []
+        self._on_chunk = on_chunk
+        self._on_silence_stop = on_silence_stop
         self.is_recording = True
         try:
             self.stream = self.audio.open(
@@ -596,6 +605,11 @@ class AudioRecorder:
                 data = self.stream.read(self.chunk, exception_on_overflow=False)
                 with self._lock:
                     self.frames.append(data)
+                if self._on_chunk and self._on_chunk(data):
+                    stop_cb = self._on_silence_stop
+                    if stop_cb:
+                        stop_cb()
+                    break
             except Exception as exc:
                 log_error(f"record_loop: {exc}")
                 break
@@ -975,6 +989,9 @@ class VoiceWorker:
         self._transcribe_busy = False
         self._confirm_busy = False
         self._confirm_timer: threading.Timer | None = None
+        self._confirm_finishing = False
+        self._ptt_end_on_silence_ms: int | None = None
+        self._silence_tracker: EndOnSilenceTracker | None = None
 
     def init(self, config: dict[str, Any] | None) -> None:
         self.config = sanitize_config(config)
@@ -998,7 +1015,7 @@ class VoiceWorker:
         else:
             self._start()
 
-    def start_ptt(self) -> None:
+    def start_ptt(self, end_on_silence_ms: int | None = None) -> None:
         """Démarre l'enregistrement push-to-talk (idempotent)."""
         if not self.recorder:
             emit({"type": "error", "message": "Worker non initialisé"})
@@ -1018,6 +1035,7 @@ class VoiceWorker:
         if self._starting:
             emit({"type": "recording", "active": True})
             return
+        self._ptt_end_on_silence_ms = end_on_silence_ms
         self._start()
 
     def stop_ptt(self) -> None:
@@ -1080,7 +1098,20 @@ class VoiceWorker:
             self._start_timer = None
             if not self.recorder or self.recording:
                 return
-            if not self.recorder.start():
+            tracker = None
+            on_chunk = None
+            if self._ptt_end_on_silence_ms:
+                tracker = EndOnSilenceTracker(
+                    self._ptt_end_on_silence_ms,
+                    chunk_samples=self.recorder.chunk,
+                )
+                self._silence_tracker = tracker
+                on_chunk = tracker.feed
+            if not self.recorder.start(
+                on_chunk=on_chunk,
+                on_silence_stop=self._end_on_silence_stop_ptt,
+            ):
+                self._silence_tracker = None
                 return
             self.recording = True
             emit({"type": "recording", "active": True})
@@ -1100,10 +1131,16 @@ class VoiceWorker:
         if self.recording:
             self._stop()
 
+    def _end_on_silence_stop_ptt(self) -> None:
+        if self.recording:
+            self._stop()
+
     def _stop(self) -> None:
         if not self.recording or not self.recorder:
             return
         self.recording = False
+        self._silence_tracker = None
+        self._ptt_end_on_silence_ms = None
         if self.auto_stop_timer:
             self.auto_stop_timer.cancel()
             self.auto_stop_timer = None
@@ -1140,7 +1177,7 @@ class VoiceWorker:
             emit(payload)
             self._transcribe_busy = False
 
-    def confirm(self, timeout_sec: float) -> None:
+    def confirm(self, timeout_sec: float, end_on_silence_ms: int | None = None) -> None:
         if not self.recorder:
             emit({"type": "error", "message": "Worker non initialisé"})
             return
@@ -1171,11 +1208,12 @@ class VoiceWorker:
             return
 
         self._confirm_busy = True
-        if not self.recorder.start():
-            self._confirm_busy = False
-            return
+        self._confirm_finishing = False
 
         def _finish() -> None:
+            if self._confirm_finishing:
+                return
+            self._confirm_finishing = True
             self._confirm_timer = None
             audio_path = self.recorder.stop() if self.recorder else None
             if not audio_path:
@@ -1185,12 +1223,35 @@ class VoiceWorker:
                     "text": "",
                 })
                 self._confirm_busy = False
+                self._confirm_finishing = False
                 return
             threading.Thread(
                 target=self._process_confirmation,
                 args=(audio_path,),
                 daemon=True,
             ).start()
+
+        tracker = None
+        on_chunk = None
+        if end_on_silence_ms:
+            tracker = EndOnSilenceTracker(
+                end_on_silence_ms,
+                chunk_samples=self.recorder.chunk,
+            )
+            on_chunk = tracker.feed
+
+        def _end_on_silence_confirm() -> None:
+            if self._confirm_timer:
+                self._confirm_timer.cancel()
+                self._confirm_timer = None
+            _finish()
+
+        if not self.recorder.start(
+            on_chunk=on_chunk,
+            on_silence_stop=_end_on_silence_confirm,
+        ):
+            self._confirm_busy = False
+            return
 
         if self._confirm_timer:
             self._confirm_timer.cancel()
@@ -1218,6 +1279,7 @@ class VoiceWorker:
                 "text": text,
             })
             self._confirm_busy = False
+            self._confirm_finishing = False
 
     def shutdown(self) -> None:
         log("shutdown")
@@ -1269,7 +1331,9 @@ def main() -> None:
                 elif cmd == "toggle":
                     worker.toggle()
                 elif cmd == "start":
-                    worker.start_ptt()
+                    worker.start_ptt(
+                        parse_end_on_silence_ms(req.get("end_on_silence_ms"))
+                    )
                 elif cmd == "stop":
                     worker.stop_ptt()
                 elif cmd == "preload":
@@ -1295,7 +1359,10 @@ def main() -> None:
                     except (TypeError, ValueError):
                         timeout_sec = 4.0
                     timeout_sec = max(0.5, min(timeout_sec, 30.0))
-                    worker.confirm(timeout_sec)
+                    worker.confirm(
+                        timeout_sec,
+                        parse_end_on_silence_ms(req.get("end_on_silence_ms")),
+                    )
                 else:
                     emit({"type": "error", "message": f"Commande inconnue : {cmd}"})
             except Exception as exc:

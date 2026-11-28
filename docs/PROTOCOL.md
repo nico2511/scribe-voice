@@ -1,4 +1,4 @@
-# Protocole JSON Lines de scribe-voice (protocole 4)
+# Protocole JSON Lines de scribe-voice (protocole 5)
 
 Le worker est un processus permanent. L'application cliente (le « parent ») lui écrit des
 **commandes** sur **stdin** et lit des **événements** sur **stdout**.
@@ -19,7 +19,7 @@ Dès le lancement, avant toute commande :
 
 ```json
 {"type": "deps", "ok": true}
-{"type": "ready", "version": "1.2.0", "protocol": 4}
+{"type": "ready", "version": "1.2.0", "protocol": 5}
 ```
 
 - `version` : version sémantique du worker (chaîne).
@@ -28,7 +28,8 @@ Dès le lancement, avant toute commande :
   - pas de champ `protocol` : v1.0 ;
   - `2` : résolution des modèles et mode hors ligne ;
   - `3` : mot-clé, champ `command` et commande `confirm` ;
-  - `4` : commandes `start` et `stop`, et `preload` traité en arrière-plan.
+  - `4` : commandes `start` et `stop`, et `preload` traité en arrière-plan ;
+  - `5` : champ optionnel `end_on_silence_ms` sur `start` et `confirm`.
 
 Si `pyaudio`, `numpy` ou `faster_whisper` ne peut pas être importé, le worker émet
 `{"type": "deps", "ok": false, "error": "<message ImportError>"}`, puis `ready`. Il reste à
@@ -40,10 +41,10 @@ l'écoute, mais `init` échouera.
 |---|---|---|
 | `init` | `{"cmd": "init", "config": {…}}` | Applique la configuration, ouvre PyAudio (une seule fois), puis crée le modèle Whisper ou le recharge si `model_size`, `device`, `compute_type`, `models_dir` ou `offline` ont changé. Le chargement se fait dans un thread : la commande rend la main tout de suite et émet `status`. |
 | `preload` | `{"cmd": "preload", "config": {…}}` | Fait comme `init`, puis attend la fin du chargement en arrière-plan, au plus 300 s, et émet un événement `model` final avec `loaded` à true ou false. Pendant ce temps, les autres commandes, par exemple `ping`, sont traitées. |
-| `start` | `{"cmd": "start"}` | Démarre l'enregistrement. Commande **idempotente** : si un enregistrement est déjà actif ou en train de démarrer, le worker renvoie `recording` `active:true` sans en lancer un second. |
+| `start` | `{"cmd": "start"}` ou `{"cmd": "start", "end_on_silence_ms": 700}` | Démarre l'enregistrement. Commande **idempotente** : si un enregistrement est déjà actif ou en train de démarrer, le worker renvoie `recording` `active:true` sans en lancer un second. Voir [Arrêt sur silence](#arrêt-sur-silence-end_on_silence_ms). |
 | `stop` | `{"cmd": "stop"}` | Arrête l'enregistrement et lance la transcription. Commande **idempotente** : si rien n'enregistre, le worker renvoie `recording` `active:false` sans `transcript`. Pendant le délai de démarrage (~220 ms), elle annule le démarrage : `recording` `active:false`, sans `transcript`. |
 | `toggle` | `{"cmd": "toggle"}` | Démarre l'enregistrement, ou l'arrête et lance la transcription. Pendant le délai de démarrage, elle annule : `recording` `active:false`, puis `transcript` vide. |
-| `confirm` | `{"cmd": "confirm", "timeout": 4}` | Écoute le micro pendant `timeout` secondes (4 par défaut, valeur bornée à [0,5 ; 30]), transcrit, puis émet `confirmation`. Le traitement se fait en arrière-plan. |
+| `confirm` | `{"cmd": "confirm", "timeout": 4}` ou `{"cmd": "confirm", "timeout": 4, "end_on_silence_ms": 700}` | Écoute le micro pendant `timeout` secondes (4 par défaut, valeur bornée à [0,5 ; 30]), transcrit, puis émet `confirmation`. Le traitement se fait en arrière-plan. `timeout` reste le plafond. Voir [Arrêt sur silence](#arrêt-sur-silence-end_on_silence_ms). |
 | `ping` | `{"cmd": "ping"}` | Répond `{"type": "pong"}`. |
 | `shutdown` | `{"cmd": "shutdown"}` | Libère PyAudio et termine le processus. La fermeture de stdin (EOF) termine aussi le worker. |
 
@@ -207,6 +208,46 @@ Avec `toggle` :
 ← {"type":"transcript","text":"…"}
 ```
 
+### Arrêt sur silence (`end_on_silence_ms`)
+
+Champ optionnel sur `start` et `confirm` : entier en millisecondes, borné à **[100 ; 60 000]** après
+parsage (valeurs plus basses sont relevées à 100, plus hautes ramenées à 60 000). Types ou valeurs
+invalides sont ignorées (comportement identique à l'absence du champ).
+
+Comportement :
+
+- Une fois qu'au moins un court signal vocal a été détecté dans le flux micro, si un **silence
+  continu** dépasse `end_on_silence_ms`, l'enregistrement s'arrête **automatiquement** et la suite
+  est la même qu'un arrêt manuel : pour `start`, `recording` `active:false`, puis `transcribing` et
+  `transcript` ; pour `confirm`, uniquement l'événement `confirmation` (pas de `recording` ni de
+  `transcribing` sur ce chemin).
+- Si **aucune** parole n'est détectée, rien ne s'arrête avant `timeout` (`confirm`), `stop` / `toggle`,
+  `max_record_seconds` (`start`), ou la fin du délai configuré.
+- Sans le champ, le comportement reste celui du protocole 4.
+
+Détection : le worker utilise le VAD Silero de faster-whisper sur chaque trame PCM lorsqu'il est
+disponible, avec repli sur un seuil RMS (comme pour filtrer les enregistrements vides). Les trames
+sont celles du micro (1024 échantillons à 16 kHz par défaut).
+
+Exemple push-to-talk :
+
+```
+→ {"cmd":"start","end_on_silence_ms":700}
+← {"type":"recording","active":true}
+… parole puis silence …
+← {"type":"recording","active":false}
+← {"type":"transcribing","active":true}
+← {"type":"transcribing","active":false}
+← {"type":"transcript","text":"…"}
+```
+
+Exemple confirmation :
+
+```
+→ {"cmd":"confirm","timeout":6,"end_on_silence_ms":700}
+← {"type":"confirmation","answer":"yes","text":"oui"}
+```
+
 ### Confirmation (`confirm`)
 
 ```
@@ -273,5 +314,5 @@ worker émet `confirmation` avec `answer:"unknown"` et `text:""`.
   ne sont pas utilisés.
 
 Tests associés : `tests/test_transcriber.py`, `tests/test_protocol.py`, `tests/test_keyword.py`,
-`tests/test_models.py`, `tests/test_config.py`, `tests/test_demo_client.py` et
-`tests/test_logging_privacy.py`.
+`tests/test_models.py`, `tests/test_config.py`, `tests/test_demo_client.py`,
+`tests/test_end_on_silence.py` et `tests/test_logging_privacy.py`.
