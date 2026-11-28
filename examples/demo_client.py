@@ -20,37 +20,46 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WORKER = ROOT / "voice_worker.py"
 
 
+def _configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError, AttributeError):
+            pass
+
+
 def _format_event(evt: dict[str, Any]) -> str:
     typ = evt.get("type", "?")
     if typ == "deps":
         if evt.get("ok"):
-            return "[deps] dépendances OK"
+            return "[deps] dependances OK"
         return f"[deps] erreur : {evt.get('error', '')}"
     if typ == "ready":
-        return f"[ready] version {evt.get('version')} · protocole {evt.get('protocol')}"
+        return f"[ready] version {evt.get('version')} - protocole {evt.get('protocol')}"
     if typ == "status":
-        return f"[status] enregistrement={evt.get('recording')} · depsOk={evt.get('depsOk')}"
+        return f"[status] enregistrement={evt.get('recording')} - depsOk={evt.get('depsOk')}"
     if typ == "model":
         if evt.get("loading"):
-            return "[model] chargement…"
+            return "[model] chargement..."
         if evt.get("loaded"):
-            return "[model] chargé"
-        return "[model] non chargé"
+            return "[model] charge"
+        return "[model] non charge"
     if typ == "recording":
-        return f"[recording] {'actif' if evt.get('active') else 'arrêté'}"
+        return f"[recording] {'actif' if evt.get('active') else 'arrete'}"
     if typ == "transcribing":
-        return f"[transcribing] {'en cours' if evt.get('active') else 'terminé'}"
+        return f"[transcribing] {'en cours' if evt.get('active') else 'termine'}"
     if typ == "transcript":
         parts = [f"[transcript] {evt.get('text', '')!r}"]
         cmd = evt.get("command")
         if isinstance(cmd, dict):
             parts.append(
-                f"  → commande ({cmd.get('keyword', '')}) : {cmd.get('text', '')!r}"
+                f"  -> commande ({cmd.get('keyword', '')}) : {cmd.get('text', '')!r}"
             )
         return "\n".join(parts)
     if typ == "confirmation":
         return (
-            f"[confirmation] réponse={evt.get('answer')} · texte={evt.get('text', '')!r}"
+            f"[confirmation] reponse={evt.get('answer')} - texte={evt.get('text', '')!r}"
         )
     if typ == "error":
         return f"[error] {evt.get('message', '')}"
@@ -97,13 +106,13 @@ class WorkerSession:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError("délai dépassé en attente d'un événement worker")
+                raise TimeoutError("delai depasse en attente d'un evenement worker")
             try:
                 evt = self._q.get(timeout=remaining)
             except queue.Empty:
                 continue
             if evt is None:
-                raise RuntimeError("stdout worker fermé")
+                raise RuntimeError("stdout worker ferme")
             if pred(evt):
                 return evt
 
@@ -144,20 +153,20 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Client de démo pour voice_worker.")
+    p = argparse.ArgumentParser(description="Client de demo pour voice_worker.")
     p.add_argument(
         "--exe",
         type=Path,
-        help="chemin vers voice_worker.exe (sinon python voice_worker.py à côté du dépôt)",
+        help="chemin vers voice_worker.exe (sinon python voice_worker.py a cote du depot)",
     )
-    p.add_argument("--model", default="small", help="model_size pour init (défaut : small)")
-    p.add_argument("--models-dir", default=None, help="dossier des modèles Whisper")
+    p.add_argument("--model", default="small", help="model_size pour init (defaut : small)")
+    p.add_argument("--models-dir", default=None, help="dossier des modeles Whisper")
     p.add_argument(
         "--offline",
         action="store_true",
-        help="mode hors ligne (modèles déjà sur le disque)",
+        help="mode hors ligne (modeles deja sur le disque)",
     )
-    p.add_argument("--keyword", default=None, help="mot-clé vocal (défaut worker)")
+    p.add_argument("--keyword", default=None, help="mot-cle vocal (defaut worker)")
     return p.parse_args(argv)
 
 
@@ -171,6 +180,7 @@ def worker_command(args: argparse.Namespace) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     args = parse_args(argv)
     cmd = worker_command(args)
     env = os.environ.copy()
@@ -187,12 +197,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         session.wait_ready_and_model()
     except (TimeoutError, RuntimeError) as exc:
-        print(f"Échec à l'initialisation : {exc}", file=sys.stderr)
+        print(f"Echec a l'initialisation : {exc}", file=sys.stderr)
         session.shutdown()
         return 1
 
     print(
-        "\nEntrée : démarrer / arrêter l'enregistrement · q + Entrée : quitter\n",
+        "\nEntree : demarrer / arreter l'enregistrement - q + Entree : quitter\n",
         flush=True,
     )
     try:

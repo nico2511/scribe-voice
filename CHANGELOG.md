@@ -16,6 +16,7 @@ dans leur `config` de `init`, ou adopter le nouveau mot-clé. La liste par défa
 la liste entièrement (y compris `[]`).
 
 - Client de démonstration : `examples/demo_client.py` (stdlib, console Windows).
+- Correctif Windows du client de démo : les messages affichés sont en ASCII (`->` à la place de `→`), et stdout/stderr sont reconfigurés en UTF-8 (`errors=replace`) pour éviter un plantage quand la page de codes est cp1252.
 
 ### Rupture : dossiers par défaut
 
