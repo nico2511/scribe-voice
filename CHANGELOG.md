@@ -2,6 +2,10 @@
 
 ## Non publié
 
+## v1.3.0 — 2026-11-28
+
+Version du worker **1.3.0**. Le protocole passe à **5**.
+
 - Protocole **5** : champ optionnel `end_on_silence_ms` sur `start` et `confirm` pour arrêter
   l'écoute après un silence continu une fois la parole détectée (détection Silero ou RMS).
 - Lanceur : `--end-on-silence-ms` (défaut 700, `0` pour désactiver) transmis à `confirm`.
